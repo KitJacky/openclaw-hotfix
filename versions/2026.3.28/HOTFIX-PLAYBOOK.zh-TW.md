@@ -1,0 +1,149 @@
+# OpenClaw Hotfix 操作手冊（zh-TW）
+
+最後更新：2026-03-30
+Owner：Jacky Kit / https://jackykit.com
+範圍：`/root/.openclaw` 部署
+主要聯絡：`Jacky Kit / https://jackykit.com`
+
+## 用途
+這份文件是 OpenClaw hotfix 的單一真實來源。
+每次 OpenClaw 升級後，請先讀這份文件，再執行 hotfix 與驗證流程。
+
+## 目前基線
+- OpenClaw 版本：`2026.3.28 (f9b1079)`
+- 安裝方式：global npm package（`/usr/lib/node_modules/openclaw`）
+- Gateway service：`openclaw-gateway.service`
+
+## 套件內 Hotfix
+以下修補位於 `/usr/lib/node_modules/openclaw/...`，升級後通常會被覆蓋，必須重新檢查。
+
+### 1) Small-model audit severity downgrade
+目的：
+- 預設 audit 會把 small model + 無 sandbox + web tools 判為 `critical`
+- 目前部署刻意接受這個風險姿態，因此降為 `info`
+
+目標檔案：
+- `/usr/lib/node_modules/openclaw/dist/audit*.js`
+
+### 2) OpenAI streaming usage include
+目的：
+- 讓串流回應固定帶 usage 統計
+
+目標檔案：
+- `/usr/lib/node_modules/openclaw/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js`
+
+### 3) cron.run timeout guard（15 分鐘）
+目的：
+- 避免手動 `cron run` 因預設 timeout 太短而過早失敗
+
+目標檔案：
+- 新版：`/usr/lib/node_modules/openclaw/dist/cron-cli-*.js`
+- 舊版：`/usr/lib/node_modules/openclaw/dist/reply-*.js`
+
+### 4) Closed-system audit downgrade
+目的：
+- 封閉系統、單一操作者、full-exec、小模型的部署，保留訊息但降為 `info`
+
+降級項目：
+- `models.weak_tier`
+- `gateway.control_ui.insecure_auth`
+- `config.insecure_or_dangerous_flags`
+- `tools.exec.safe_bin_trusted_dirs_risky`
+- `tools.exec.security_full_configured`
+
+### 5) CLI gateway RPC config 相容性（版本感知）
+目的：
+- 舊版曾因 `callGatewayFromCli(...)` 未注入 config 而導致 `openclaw cron run` 出現 `gateway closed (1000 normal closure)`
+- 新版不一定還用相同 bundle，因此檢查邏輯需要版本感知
+
+## Service / Config Hotfix
+以下位於 npm 套件樹之外，通常升級後會保留，但如果重新安裝 service 或 doctor 強制重建，仍需重查。
+
+### 6) Gateway handshake/runtime patch（版本感知）
+目的：
+- 修正 handshake timeout 與 gateway CLI 入口穩定性
+
+重點：
+- `2026.3.24+` 起，handshake timeout 邏輯移到 `method-scopes-*.js`
+- 預期修補後預設值：`DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 15e3`
+
+### 7) Three-Day Blog Analysis delivery suppression
+目的：
+- 避免 retrospective job 因 telegram delivery 問題而被誤判為失敗
+
+目標設定：
+- `jobs.json` 內 job id `3095001f-8aef-4792-ba82-043a8a1e5230`
+- `delivery.mode = "none"`
+
+### 8a) state dir 權限
+目的：
+- 避免 audit 對 `/root/.openclaw` 權限提出警告
+
+要求：
+- 目錄權限維持 `700`
+
+### 8) loopback trusted proxies
+目的：
+- 移除 loopback 控制介面的 reverse-proxy trust warning
+
+設定：
+- `gateway.trustedProxies = ["127.0.0.1/32", "::1/128"]`
+
+### 9) 本地 device auth scope 修復
+目的：
+- 修正本地 CLI 與 paired device metadata scope 漂移問題
+
+必要 scope：
+- `operator.admin`
+- `operator.approvals`
+- `operator.pairing`
+- `operator.read`
+- `operator.write`
+
+## Hotfix 歸檔同步
+每次 hotfix 與驗證完成後，請同步以下資產到：
+- `https://github.com/jackykit0116/openclaw-hotfix.git`
+
+必要資產：
+- `/root/.openclaw/workspace/HOTFIX-PLAYBOOK.md`
+- `/root/.openclaw/workspace/HOTFIX-PLAYBOOK.zh-TW.md`
+- `/root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh`
+
+規則：
+- 保留 `latest/`
+- 保留 `versions/<openclaw-version>/`
+- 在 `metadata/manifest.json` 記錄 `hotfix_version` 與 `updated_at`
+
+同步指令：
+- `bash /root/.openclaw/workspace/scripts/finalize-openclaw-hotfix-sync.sh`
+
+## 自動化腳本
+主要 hotfix 腳本：
+- `/root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh`
+
+模式：
+- 檢查：
+  - `bash /root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh --check`
+- 套用：
+  - `bash /root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh --apply`
+
+## 標準升級流程
+1. 預覽：
+   - `openclaw update --dry-run --json`
+2. 升級：
+   - `npm i -g openclaw@latest`
+3. 重新套用 hotfix：
+   - `bash /root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh --apply`
+4. 確認 service override：
+   - `systemctl --user show openclaw-gateway.service -p DropInPaths -p Environment`
+5. 重啟：
+   - `systemctl --user daemon-reload`
+   - `systemctl --user restart openclaw-gateway.service`
+   - `systemctl --user restart openclaw-node.service`
+6. 最後驗證：
+   - `openclaw --version`
+   - `openclaw gateway call health`
+   - `openclaw cron status`
+   - `openclaw security audit`
+7. 發布 hotfix 歸檔：
+   - `bash /root/.openclaw/workspace/scripts/finalize-openclaw-hotfix-sync.sh`
