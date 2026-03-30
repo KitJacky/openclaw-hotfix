@@ -2,12 +2,12 @@
   "latest": {
     "openclaw_version": "2026.3.28",
     "hotfix_version": "2026.03.30.1",
-    "updated_at": "2026-03-30T04:30:58Z"
+    "updated_at": "2026-03-30T04:35:05Z"
   },
   "versions": {
     "2026.3.28": {
       "hotfix_version": "2026.03.30.1",
-      "updated_at": "2026-03-30T04:30:58Z",
+      "updated_at": "2026-03-30T04:35:05Z",
       "files": [
         "versions/2026.3.28/openclaw-post-update-hotfix.sh",
         "versions/2026.3.28/HOTFIX-PLAYBOOK.md"

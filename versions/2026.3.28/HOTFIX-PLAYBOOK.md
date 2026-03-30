@@ -1,8 +1,9 @@
 # OpenClaw Hotfix Playbook
 
 Last updated: 2026-03-30
-Owner: Codex + Cheese
+Owner: Jacky Kit / https://jackykit.com
 Scope: `/root/.openclaw` deployment
+Primary contact: `Jacky Kit / https://jackykit.com`
 
 ## Purpose
 This file is the single source of truth for OpenClaw hotfixes that may be overwritten by future upgrades.
