@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+# Verify/re-apply OpenClaw post-update hotfixes.
+# Usage:
+#   bash openclaw-post-update-hotfix.sh --check
+#   bash openclaw-post-update-hotfix.sh --apply
+
+set -euo pipefail
+
+MODE="${1:---check}"
+OPENCLAW_ROOT="/usr/lib/node_modules/openclaw"
+DIST_DIR="${OPENCLAW_ROOT}/dist"
+PROVIDER_FILE="${OPENCLAW_ROOT}/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js"
+HOTFIX_VERSION="2026.03.30.1"
+HOTFIX_REPO_URL="https://github.com/jackykit0116/openclaw-hotfix.git"
+
+log() {
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+require_file() {
+  local f="$1"
+  [[ -f "$f" ]] || { log "missing file: $f"; exit 1; }
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || { log "missing command: $1"; exit 1; }
+}
+
+list_audit_files() {
+  ls -1 "${DIST_DIR}"/audit*.js 2>/dev/null || true
+}
+
+check_small_model_hotfix() {
+  local files=()
+  mapfile -t files < <(list_audit_files)
+  [[ ${#files[@]} -gt 0 ]] || { log "audit bundle not found"; return 1; }
+
+  if rg -q 'severity:\s*hasUnsafe\s*\?\s*"critical"\s*:\s*"info"' "${files[@]}"; then
+    return 1
+  fi
+  return 0
+}
+
+check_closed_system_audit_hotfix() {
+  local files=()
+  mapfile -t files < <(list_audit_files)
+  [[ ${#files[@]} -gt 0 ]] || { log "audit bundle not found"; return 1; }
+
+  rg -U -q 'checkId:\s*"models\.weak_tier",\n\s*severity:\s*"info"' "${files[@]}" \
+    && rg -U -q 'checkId:\s*"gateway\.control_ui\.insecure_auth",\n\s*severity:\s*"info"' "${files[@]}" \
+    && rg -U -q 'checkId:\s*"config\.insecure_or_dangerous_flags",\n\s*severity:\s*"info"' "${files[@]}" \
+    && rg -U -q 'checkId:\s*"tools\.exec\.safe_bin_trusted_dirs_risky",\n\s*severity:\s*"info"' "${files[@]}" \
+    && rg -U -q 'checkId:\s*"tools\.exec\.security_full_configured",\n\s*severity:\s*"info"' "${files[@]}"
+}
+
+check_include_usage_hotfix() {
+  require_file "$PROVIDER_FILE"
+  rg -q 'stream_options\s*=\s*\{\s*include_usage:\s*true\s*\}' "$PROVIDER_FILE" \
+    && ! rg -q 'if \(compat\.supportsUsageInStreaming !== false\)' "$PROVIDER_FILE"
+}
+
+find_reply_file() {
+  ls -1t "${DIST_DIR}"/reply-*.js 2>/dev/null | head -n 1
+}
+
+find_cron_cli_file() {
+  ls -1t "${DIST_DIR}"/cron-cli-*.js 2>/dev/null | head -n 1
+}
+
+check_cron_run_timeout_hotfix() {
+  local cron_file
+  cron_file="$(find_cron_cli_file)"
+  if [[ -n "$cron_file" ]]; then
+    # Newer builds set cron run default timeout in cron-cli directly.
+    rg -q 'command\.getOptionValueSource\("timeout"\)\s*===\s*"default"\)\s*opts\.timeout\s*=\s*"900000"' "$cron_file"
+    return $?
+  fi
+
+  # Legacy fallback: patched in reply bundle.
+  local reply_file
+  reply_file="$(find_reply_file)"
+  [[ -n "$reply_file" ]] || { log "reply/cron-cli bundle not found"; return 1; }
+  rg -q 'callGateway\("cron\.run", runOpts' "$reply_file"
+}
+
+check_gateway_rpc_config_hotfix() {
+  local rpc_files=() auth_files=()
+  mapfile -t rpc_files < <(ls -1 "${DIST_DIR}"/gateway-rpc-*.js 2>/dev/null || true)
+
+  if [[ ${#rpc_files[@]} -gt 0 ]]; then
+    if rg -q 'const config = opts\.config \?\? await readBestEffortConfig\(\);' "${rpc_files[@]}" && rg -q 'config,' "${rpc_files[@]}"; then
+      return 0
+    fi
+  fi
+
+  mapfile -t auth_files < <(ls -1 "${DIST_DIR}"/auth-profiles-*.js 2>/dev/null || true)
+  if [[ ${#auth_files[@]} -gt 0 ]]; then
+    if rg -q 'async function callGatewayFromCli' "${auth_files[@]}"; then
+      if rg -q 'const config = options\.config \?\? gatewayCallDeps\.loadConfig\(\);' "${DIST_DIR}"/call-*.js 2>/dev/null; then
+        return 0
+      fi
+      # 2026.3.28-style builds no longer expose the old config-injection pattern.
+      # Accept successful runtime smoke tests as the compatibility proof.
+      if openclaw cron status --json >/dev/null 2>&1 && openclaw gateway call health --timeout 20000 --json >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+  fi
+
+  log "gateway-rpc/auth-profiles bundle not found or missing expected config path"
+  return 1
+}
+
+
+check_gateway_handshake_runtime_hotfix() {
+  local gateway_files=() method_files=()
+  mapfile -t method_files < <(ls -1 "${DIST_DIR}"/method-scopes-*.js 2>/dev/null || true)
+  if [[ ${#method_files[@]} -gt 0 ]]; then
+    rg -q 'const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 15e3;' "${method_files[@]}"       && rg -q 'OPENCLAW_HANDSHAKE_TIMEOUT_MS' "${method_files[@]}"       && rg -q 'OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS' "${method_files[@]}"
+    return $?
+  fi
+
+  mapfile -t gateway_files < <(ls -1 "${DIST_DIR}"/gateway-cli-*.js 2>/dev/null || true)
+  [[ ${#gateway_files[@]} -gt 0 ]] || { log "gateway-cli bundle not found"; return 1; }
+  rg -q 'const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15e3;' "${gateway_files[@]}"     && (rg -q 'OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS' "${gateway_files[@]}" || rg -q 'OPENCLAW_HANDSHAKE_TIMEOUT_MS' "${gateway_files[@]}")     && rg -q 'OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS' "${gateway_files[@]}"
+}
+
+
+backup_file() {
+  local f="$1"
+  local ts
+  ts="$(date +%Y%m%d-%H%M%S)"
+  cp "$f" "${f}.bak.hotfix-${ts}"
+}
+
+apply_small_model_hotfix() {
+  local files=()
+  mapfile -t files < <(list_audit_files)
+  [[ ${#files[@]} -gt 0 ]] || { log "audit bundle not found"; return 1; }
+  for f in "${files[@]}"; do
+    backup_file "$f"
+  done
+  perl -0777 -i -pe 's/severity:\s*hasUnsafe\s*\?\s*"critical"\s*:\s*"info"/severity: "info"/g' "${files[@]}"
+}
+
+apply_closed_system_audit_hotfix() {
+  local files=()
+  mapfile -t files < <(list_audit_files)
+  [[ ${#files[@]} -gt 0 ]] || { log "audit bundle not found"; return 1; }
+  for f in "${files[@]}"; do
+    backup_file "$f"
+  done
+  perl -0777 -i -pe 's/(checkId:\s*"models\.weak_tier",\s*severity:\s*)"warn"/${1}"info"/g; s/(checkId:\s*"gateway\.control_ui\.insecure_auth",\s*severity:\s*)"warn"/${1}"info"/g; s/(checkId:\s*"config\.insecure_or_dangerous_flags",\s*severity:\s*)"warn"/${1}"info"/g; s/(checkId:\s*"tools\.exec\.safe_bin_trusted_dirs_risky",\s*severity:\s*)"warn"/${1}"info"/g; s/(checkId:\s*"tools\.exec\.security_full_configured",\s*severity:\s*)(openExecSurfacePaths\.length > 0 \? "critical" : "warn"|"warn")/${1}"info"/g' "${files[@]}"
+}
+
+apply_cron_run_timeout_hotfix() {
+  local cron_file
+  cron_file="$(find_cron_cli_file)"
+  if [[ -n "$cron_file" ]]; then
+    backup_file "$cron_file"
+    perl -0777 -i -pe 's/command\.getOptionValueSource\("timeout"\)\s*===\s*"default"\)\s*opts\.timeout\s*=\s*"(?:600000|900000)"/command.getOptionValueSource("timeout") === "default") opts.timeout = "900000"/g' "$cron_file"
+    return 0
+  fi
+
+  local reply_file
+  reply_file="$(find_reply_file)"
+  [[ -n "$reply_file" ]] || { log "reply bundle not found"; return 1; }
+  backup_file "$reply_file"
+  perl -0777 -i -pe 's/return jsonResult\(await callGateway\("cron\.run", gatewayOpts, \{\n\s*id,\n\s*mode: params\.runMode === "due" \|\| params\.runMode === "force" \? params\.runMode : "force"\n\s*\}\)\);/const runOpts = { ...gatewayOpts, timeoutMs: Math.max(gatewayOpts.timeoutMs ?? 0, 15 * 6e4) };\n\t\t\t\t\treturn jsonResult(await callGateway("cron.run", runOpts, {\n\t\t\t\t\t\tid,\n\t\t\t\t\t\tmode: params.runMode === "due" || params.runMode === "force" ? params.runMode : "force"\n\t\t\t\t\t}));/s' "$reply_file"
+}
+
+apply_include_usage_hotfix() {
+  require_file "$PROVIDER_FILE"
+  backup_file "$PROVIDER_FILE"
+  perl -0777 -i -pe 's/\n\s*if \(compat\.supportsUsageInStreaming !== false\) \{\n\s*params\.stream_options = \{ include_usage: true \};\n\s*\}/\n    params.stream_options = { include_usage: true };/s' "$PROVIDER_FILE"
+}
+
+apply_gateway_handshake_runtime_hotfix() {
+  local method_files=() gateway_files=()
+  mapfile -t method_files < <(ls -1 "${DIST_DIR}"/method-scopes-*.js 2>/dev/null || true)
+  if [[ ${#method_files[@]} -gt 0 ]]; then
+    for f in "${method_files[@]}"; do
+      backup_file "$f"
+    done
+    perl -0777 -i -pe 's/const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 1e4;/const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 15e3;/g' "${method_files[@]}"
+    return 0
+  fi
+
+  mapfile -t gateway_files < <(ls -1 "${DIST_DIR}"/gateway-cli-*.js 2>/dev/null || true)
+  [[ ${#gateway_files[@]} -gt 0 ]] || { log "gateway-cli bundle not found"; return 1; }
+  for f in "${gateway_files[@]}"; do
+    backup_file "$f"
+  done
+  perl -0777 -i -pe 's/const DEFAULT_HANDSHAKE_TIMEOUT_MS = 1e4;/const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15e3;/g; s/process\.env\.OPENCLAW_HANDSHAKE_TIMEOUT_MS \|\| process\.env\.VITEST && process\.env\.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS/process.env.OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS || process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS/g' "${gateway_files[@]}"
+}
+
+print_check_summary() {
+  local small_status usage_status cron_status closed_audit_status gateway_rpc_status gateway_handshake_status
+  small_status="FAIL"
+  usage_status="FAIL"
+  cron_status="FAIL"
+  closed_audit_status="FAIL"
+  gateway_rpc_status="FAIL"
+  gateway_handshake_status="FAIL"
+
+  check_small_model_hotfix && small_status="OK"
+  check_include_usage_hotfix && usage_status="OK"
+  check_cron_run_timeout_hotfix && cron_status="OK"
+  check_closed_system_audit_hotfix && closed_audit_status="OK"
+  check_gateway_rpc_config_hotfix && gateway_rpc_status="OK"
+  check_gateway_handshake_runtime_hotfix && gateway_handshake_status="OK"
+
+  log "OpenClaw version: $(openclaw --version 2>/dev/null || echo unknown)"
+  log "Hotfix version: ${HOTFIX_VERSION}"
+  log "small-model severity hotfix: ${small_status}"
+  log "closed-system audit hotfix: ${closed_audit_status}"
+  log "include_usage hotfix: ${usage_status}"
+  log "cron.run timeout hotfix: ${cron_status}"
+  log "gateway-rpc config hotfix: ${gateway_rpc_status}"
+  log "gateway handshake/runtime hotfix: ${gateway_handshake_status}"
+
+  [[ "$small_status" == "OK" && "$closed_audit_status" == "OK" && "$usage_status" == "OK" && "$cron_status" == "OK" && "$gateway_rpc_status" == "OK" && "$gateway_handshake_status" == "OK" ]]
+}
+
+main() {
+  require_cmd rg
+  require_cmd perl
+  require_cmd openclaw
+
+  case "$MODE" in
+    --check)
+      if print_check_summary; then
+        log "all hotfix checks passed"
+      else
+        log "one or more hotfix checks failed"
+        exit 2
+      fi
+      ;;
+    --apply)
+      if [[ "$(id -u)" -ne 0 ]]; then
+        log "--apply requires root privileges"
+        exit 1
+      fi
+
+      if ! check_small_model_hotfix; then
+        log "re-applying small-model severity hotfix"
+        apply_small_model_hotfix
+      fi
+
+      if ! check_closed_system_audit_hotfix; then
+        log "re-applying closed-system audit hotfix"
+        apply_closed_system_audit_hotfix
+      fi
+
+      if ! check_cron_run_timeout_hotfix; then
+        log "re-applying cron.run timeout hotfix"
+        apply_cron_run_timeout_hotfix
+      fi
+
+      if ! check_include_usage_hotfix; then
+        log "re-applying include_usage hotfix"
+        apply_include_usage_hotfix
+      fi
+
+      if ! check_gateway_handshake_runtime_hotfix; then
+        log "re-applying gateway handshake/runtime hotfix"
+        apply_gateway_handshake_runtime_hotfix
+      fi
+
+      print_check_summary
+      log "apply complete"
+      ;;
+    *)
+      echo "Usage: bash openclaw-post-update-hotfix.sh [--check|--apply]"
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
