@@ -257,9 +257,11 @@ After every successful hotfix + verification cycle, publish the current assets t
 Secondary publish config source:
 - `/home/github/.env`
 - required keys:
-  - `github_key`
   - `github_email`
   - `github_openclaw_hotfix_repo`
+  - `github_primary_key` (for `jackykit0116`, optional fallback to `github_key`)
+  - `github_secondary_key` (for `KitJacky`, optional fallback to `github_key`)
+  - optional user overrides: `github_primary_user`, `github_secondary_user`
 
 Required assets:
 - `/root/.openclaw/workspace/HOTFIX-PLAYBOOK.md`

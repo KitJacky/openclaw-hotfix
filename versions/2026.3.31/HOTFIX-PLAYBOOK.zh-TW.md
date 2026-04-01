@@ -135,9 +135,11 @@ Owner：Jacky Kit / https://jackykit.com
 次要發布設定來源：
 - `/home/github/.env`
 - 必要鍵值：
-  - `github_key`
   - `github_email`
   - `github_openclaw_hotfix_repo`
+  - `github_primary_key`（`jackykit0116` 用，未提供時回退 `github_key`）
+  - `github_secondary_key`（`KitJacky` 用，未提供時回退 `github_key`）
+  - 可選帳號覆蓋：`github_primary_user`、`github_secondary_user`
 
 必要資產：
 - `/root/.openclaw/workspace/HOTFIX-PLAYBOOK.md`
