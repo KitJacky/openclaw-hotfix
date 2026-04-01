@@ -138,6 +138,7 @@ Owner：Jacky Kit / https://jackykit.com
   - `github_email`
   - `github_openclaw_hotfix_repo`
   - `github_primary_key`（`jackykit0116` 用，未提供時回退 `github_key`）
+  - `github_secondary_classic_key`（`KitJacky` 用，建議優先，fine-grained 不通時使用）
   - `github_secondary_key`（`KitJacky` 用，未提供時回退 `github_key`）
   - 可選帳號覆蓋：`github_primary_user`、`github_secondary_user`
 

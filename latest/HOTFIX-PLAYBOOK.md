@@ -260,6 +260,7 @@ Secondary publish config source:
   - `github_email`
   - `github_openclaw_hotfix_repo`
   - `github_primary_key` (for `jackykit0116`, optional fallback to `github_key`)
+  - `github_secondary_classic_key` (for `KitJacky`, preferred when fine-grained PAT fails)
   - `github_secondary_key` (for `KitJacky`, optional fallback to `github_key`)
   - optional user overrides: `github_primary_user`, `github_secondary_user`
 
