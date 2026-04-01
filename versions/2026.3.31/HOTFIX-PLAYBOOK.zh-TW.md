@@ -129,6 +129,15 @@ Owner：Jacky Kit / https://jackykit.com
 ## Hotfix 歸檔同步
 每次 hotfix 與驗證完成後，請同步以下資產到：
 - `https://github.com/jackykit0116/openclaw-hotfix.git`
+- 本地備份鏡像：`/home/github/openclaw-hotfix`
+- 單向發布目標：`https://github.com/KitJacky/openclaw-hotfix`
+
+次要發布設定來源：
+- `/home/github/.env`
+- 必要鍵值：
+  - `github_key`
+  - `github_email`
+  - `github_openclaw_hotfix_repo`
 
 必要資產：
 - `/root/.openclaw/workspace/HOTFIX-PLAYBOOK.md`
@@ -142,6 +151,11 @@ Owner：Jacky Kit / https://jackykit.com
 
 同步指令：
 - `bash /root/.openclaw/workspace/scripts/finalize-openclaw-hotfix-sync.sh`
+
+預期收尾行為：
+- commit/push 到 `jackykit0116/openclaw-hotfix`
+- 使用 `rsync --delete` 同步到 `/home/github/openclaw-hotfix`
+- 單向 push `main` 到 `KitJacky/openclaw-hotfix`
 
 ## 自動化腳本
 主要 hotfix 腳本：

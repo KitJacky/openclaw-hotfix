@@ -251,6 +251,15 @@ Notes:
 ## Hotfix Archive Sync
 After every successful hotfix + verification cycle, publish the current assets to:
 - `https://github.com/jackykit0116/openclaw-hotfix.git`
+- local backup mirror: `/home/github/openclaw-hotfix`
+- one-way publish target: `https://github.com/KitJacky/openclaw-hotfix`
+
+Secondary publish config source:
+- `/home/github/.env`
+- required keys:
+  - `github_key`
+  - `github_email`
+  - `github_openclaw_hotfix_repo`
 
 Required assets:
 - `/root/.openclaw/workspace/HOTFIX-PLAYBOOK.md`
@@ -264,6 +273,11 @@ Archive rule:
 
 Sync command:
 - `bash /root/.openclaw/workspace/scripts/finalize-openclaw-hotfix-sync.sh`
+
+Expected finalize behavior:
+- commit/push snapshot to `jackykit0116/openclaw-hotfix`
+- sync local mirror to `/home/github/openclaw-hotfix` (`rsync --delete`)
+- push `main` one-way to `KitJacky/openclaw-hotfix`
 
 ## Automation Script
 Use this script after every OpenClaw upgrade:
