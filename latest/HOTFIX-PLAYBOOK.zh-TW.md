@@ -68,11 +68,19 @@ Owner：Jacky Kit / https://jackykit.com
 必要邏輯：
 - `runWebSearch(params)` 主供應商失敗後，自動改試其他可用 provider（先排除原 provider）
 - 所有 provider 都失敗時，才回拋原錯誤
+- 加入每個 provider 的冷卻佇列，避免瞬間連發造成 429：
+  - `resolveWebSearchCooldownMs()`
+  - `enqueueWebSearchWithCooldown(providerId, execute)`
+  - 主供應商與備援供應商都走同一套冷卻機制
 
 環境需求：
 - `TAVILY_API_KEY` 必須可讀取（本機放在 `/root/.openclaw/.env`）
 - gateway/node service 需載入 `.env`：
   - `EnvironmentFile=-/root/.openclaw/.env`
+- 冷卻參數：
+  - `OPENCLAW_WEB_SEARCH_COOLDOWN_MS`（優先，限制在 1000-5000ms）
+  - `OPENCLAW_WEB_SEARCH_COOLDOWN_SECONDS`（次要，限制在 1-5 秒）
+  - 本機預設：`OPENCLAW_WEB_SEARCH_COOLDOWN_MS=2000`
 
 ## Service / Config Hotfix
 以下位於 npm 套件樹之外，通常升級後會保留，但如果重新安裝 service 或 doctor 強制重建，仍需重查。

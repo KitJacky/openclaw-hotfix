@@ -11,7 +11,7 @@ OPENCLAW_ROOT="/usr/lib/node_modules/openclaw"
 DIST_DIR="${OPENCLAW_ROOT}/dist"
 PROVIDER_FILE="${OPENCLAW_ROOT}/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js"
 WEB_SEARCH_RUNTIME_FILE="${DIST_DIR}/runtime-BiQlOaAl.js"
-HOTFIX_VERSION="2026.04.01.2"
+HOTFIX_VERSION="2026.04.01.3"
 HOTFIX_REPO_URL="https://github.com/jackykit0116/openclaw-hotfix.git"
 
 log() {
@@ -140,7 +140,10 @@ check_gateway_handshake_runtime_hotfix() {
 check_web_search_provider_fallback_hotfix() {
   require_file "$WEB_SEARCH_RUNTIME_FILE"
   rg -q 'web_search primary provider failed' "$WEB_SEARCH_RUNTIME_FILE" \
-    && rg -F -q 'const fallbackProviders = sortWebSearchProvidersForAutoDetect(resolveRuntimeWebSearchProviders({' "$WEB_SEARCH_RUNTIME_FILE"
+    && rg -F -q 'const fallbackProviders = sortWebSearchProvidersForAutoDetect(resolveRuntimeWebSearchProviders({' "$WEB_SEARCH_RUNTIME_FILE" \
+    && rg -q 'resolveWebSearchCooldownMs' "$WEB_SEARCH_RUNTIME_FILE" \
+    && rg -q 'enqueueWebSearchWithCooldown' "$WEB_SEARCH_RUNTIME_FILE" \
+    && rg -q 'OPENCLAW_WEB_SEARCH_COOLDOWN_MS' "$WEB_SEARCH_RUNTIME_FILE"
 }
 
 
@@ -215,7 +218,14 @@ apply_gateway_handshake_runtime_hotfix() {
 apply_web_search_provider_fallback_hotfix() {
   require_file "$WEB_SEARCH_RUNTIME_FILE"
   backup_file "$WEB_SEARCH_RUNTIME_FILE"
+  # Step 1: ensure provider fallback exists (legacy upstream -> fallback patch).
   perl -0777 -i -pe 's/async function runWebSearch\(params\) \{\n\tconst resolved = resolveWebSearchDefinition\(\{\n\t\t\.\.\.params,\n\t\tpreferRuntimeProviders: true\n\t\}\);\n\tif \(!resolved\) throw new Error\("web_search is disabled or no provider is available\."\);\n\treturn \{\n\t\tprovider: resolved\.provider\.id,\n\t\tresult: await resolved\.definition\.execute\(params\.args\)\n\t\};\n\}/async function runWebSearch(params) {\n\tconst resolved = resolveWebSearchDefinition({\n\t\t...params,\n\t\tpreferRuntimeProviders: true\n\t});\n\tif (!resolved) throw new Error(\"web_search is disabled or no provider is available.\");\n\ttry {\n\t\treturn {\n\t\t\tprovider: resolved.provider.id,\n\t\t\tresult: await resolved.definition.execute(params.args)\n\t\t};\n\t} catch (primaryError) {\n\t\tconst fallbackProviders = sortWebSearchProvidersForAutoDetect(resolveRuntimeWebSearchProviders({\n\t\t\tconfig: params?.config,\n\t\t\tbundledAllowlistCompat: true\n\t\t})).filter((entry) => entry.id !== resolved.provider.id);\n\t\tfor (const fallbackProvider of fallbackProviders) {\n\t\t\ttry {\n\t\t\t\tconst fallbackDefinition = fallbackProvider.createTool({\n\t\t\t\t\tconfig: params?.config,\n\t\t\t\t\tsearchConfig: resolveSearchConfig(params?.config),\n\t\t\t\t\truntimeMetadata: getActiveRuntimeWebToolsMetadata()?.search\n\t\t\t\t});\n\t\t\t\tif (!fallbackDefinition) continue;\n\t\t\t\tlogVerbose(`web_search primary provider failed (${resolved.provider.id}); falling back to \"${fallbackProvider.id}\"`);\n\t\t\t\treturn {\n\t\t\t\t\tprovider: fallbackProvider.id,\n\t\t\t\t\tresult: await fallbackDefinition.execute(params.args)\n\t\t\t\t};\n\t\t\t} catch {\n\t\t\t\tcontinue;\n\t\t\t}\n\t\t}\n\t\tthrow primaryError;\n\t}\n}/s' "$WEB_SEARCH_RUNTIME_FILE"
+  # Step 2: add 1-5s per-provider cooldown helper if missing.
+  if ! rg -q 'resolveWebSearchCooldownMs' "$WEB_SEARCH_RUNTIME_FILE"; then
+    perl -0777 -i -pe 's#//\#region src/web-search/runtime\.ts\nfunction resolveSearchConfig\(cfg\) \{#//#region src/web-search/runtime.ts\nconst WEB_SEARCH_COOLDOWN_MS_MIN = 1e3;\nconst WEB_SEARCH_COOLDOWN_MS_MAX = 5e3;\nconst WEB_SEARCH_COOLDOWN_MS_DEFAULT = 2e3;\nconst webSearchProviderLastRequestAt = /* @__PURE__ */ new Map();\nconst webSearchProviderQueue = /* @__PURE__ */ new Map();\nfunction resolveWebSearchCooldownMs() {\n\tconst rawMs = Number.parseInt(process.env.OPENCLAW_WEB_SEARCH_COOLDOWN_MS ?? \"\", 10);\n\tif (Number.isFinite(rawMs) && rawMs >= WEB_SEARCH_COOLDOWN_MS_MIN) return Math.min(rawMs, WEB_SEARCH_COOLDOWN_MS_MAX);\n\tconst rawSec = Number.parseInt(process.env.OPENCLAW_WEB_SEARCH_COOLDOWN_SECONDS ?? \"\", 10);\n\tif (Number.isFinite(rawSec) && rawSec >= 1) return Math.min(rawSec * 1e3, WEB_SEARCH_COOLDOWN_MS_MAX);\n\treturn WEB_SEARCH_COOLDOWN_MS_DEFAULT;\n}\nasync function enqueueWebSearchWithCooldown(providerId, execute) {\n\tconst previous = webSearchProviderQueue.get(providerId) ?? Promise.resolve();\n\tconst run = previous.catch(() => void 0).then(async () => {\n\t\tconst cooldownMs = resolveWebSearchCooldownMs();\n\t\tconst now = Date.now();\n\t\tconst lastAt = webSearchProviderLastRequestAt.get(providerId) ?? 0;\n\t\tconst waitMs = lastAt + cooldownMs - now;\n\t\tif (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));\n\t\tconst result = await execute();\n\t\twebSearchProviderLastRequestAt.set(providerId, Date.now());\n\t\treturn result;\n\t});\n\twebSearchProviderQueue.set(providerId, run.then(() => void 0, () => void 0));\n\treturn run;\n}\nfunction resolveSearchConfig(cfg) {#s' "$WEB_SEARCH_RUNTIME_FILE"
+  fi
+  # Step 3: always route provider execution through cooldown queue.
+  perl -0777 -i -pe 's/result: await resolved\.definition\.execute\(params\.args\)/result: await enqueueWebSearchWithCooldown(resolved.provider.id, () => resolved.definition.execute(params.args))/g; s/result: await fallbackDefinition\.execute\(params\.args\)/result: await enqueueWebSearchWithCooldown(fallbackProvider.id, () => fallbackDefinition.execute(params.args))/g' "$WEB_SEARCH_RUNTIME_FILE"
 }
 
 print_check_summary() {
@@ -244,7 +254,7 @@ print_check_summary() {
   log "cron.run timeout hotfix: ${cron_status}"
   log "gateway-rpc config hotfix: ${gateway_rpc_status}"
   log "gateway handshake/runtime hotfix: ${gateway_handshake_status}"
-  log "web_search provider fallback hotfix: ${web_search_fallback_status}"
+  log "web_search fallback+cooldown hotfix: ${web_search_fallback_status}"
 
   [[ "$small_status" == "OK" && "$closed_audit_status" == "OK" && "$usage_status" == "OK" && "$cron_status" == "OK" && "$gateway_rpc_status" == "OK" && "$gateway_handshake_status" == "OK" && "$web_search_fallback_status" == "OK" ]]
 }
@@ -294,7 +304,7 @@ main() {
         apply_gateway_handshake_runtime_hotfix
       fi
       if ! check_web_search_provider_fallback_hotfix; then
-        log "re-applying web_search provider fallback hotfix"
+        log "re-applying web_search fallback+cooldown hotfix"
         apply_web_search_provider_fallback_hotfix
       fi
 

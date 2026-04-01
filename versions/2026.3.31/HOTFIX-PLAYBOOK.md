@@ -110,6 +110,10 @@ Required patched logic:
 - In `runWebSearch(params)`, wrap primary provider execution in `try/catch`.
 - On primary failure, resolve runtime providers and retry with alternates (excluding primary).
 - Keep original error if all fallback providers fail.
+- Add per-provider cooldown queue to reduce provider-side 429 bursts:
+  - `resolveWebSearchCooldownMs()`
+  - `enqueueWebSearchWithCooldown(providerId, execute)`
+  - route both primary and fallback execution through cooldown queue.
 
 Environment requirements:
 - Tavily key must be available via:
@@ -118,6 +122,10 @@ Environment requirements:
 - This host uses:
   - `/root/.openclaw/.env` with `TAVILY_API_KEY=...`
   - `EnvironmentFile=-/root/.openclaw/.env` in gateway/node systemd user units
+- Cooldown env knobs:
+  - `OPENCLAW_WEB_SEARCH_COOLDOWN_MS` (preferred, clamped to 1000-5000ms)
+  - `OPENCLAW_WEB_SEARCH_COOLDOWN_SECONDS` (fallback, clamped to 1-5s)
+  - host default: `OPENCLAW_WEB_SEARCH_COOLDOWN_MS=2000`
 
 Verification:
 - `openclaw gateway call health --timeout 20000 --json`
