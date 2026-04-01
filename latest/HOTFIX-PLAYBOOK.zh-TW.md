@@ -57,6 +57,23 @@ Owner：Jacky Kit / https://jackykit.com
 - 舊版曾因 `callGatewayFromCli(...)` 未注入 config 而導致 `openclaw cron run` 出現 `gateway closed (1000 normal closure)`
 - 新版不一定還用相同 bundle，因此檢查邏輯需要版本感知
 
+### 6) web_search 供應商備援（Brave -> Tavily）
+目的：
+- 高頻研究排程下，Brave 常出現 `429 rate limit`
+- 目前 runtime 預設單一 provider，不會自動切換
+
+目標檔案：
+- `/usr/lib/node_modules/openclaw/dist/runtime-BiQlOaAl.js`
+
+必要邏輯：
+- `runWebSearch(params)` 主供應商失敗後，自動改試其他可用 provider（先排除原 provider）
+- 所有 provider 都失敗時，才回拋原錯誤
+
+環境需求：
+- `TAVILY_API_KEY` 必須可讀取（本機放在 `/root/.openclaw/.env`）
+- gateway/node service 需載入 `.env`：
+  - `EnvironmentFile=-/root/.openclaw/.env`
+
 ## Service / Config Hotfix
 以下位於 npm 套件樹之外，通常升級後會保留，但如果重新安裝 service 或 doctor 強制重建，仍需重查。
 

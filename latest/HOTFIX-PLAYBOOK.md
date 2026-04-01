@@ -98,6 +98,32 @@ Expected behavior after patch:
 - if a job is already active, CLI should return business result like:
   - `{"ok":true,"ran":false,"reason":"already-running"}`
 
+### 6) web_search provider fallback (Brave -> Tavily)
+Reason:
+- `web_search` can hit Brave 429 throttling under high-frequency cron research.
+- Upstream runtime selects one provider per call and does not auto-fallback.
+
+Patch target:
+- `/usr/lib/node_modules/openclaw/dist/runtime-BiQlOaAl.js`
+
+Required patched logic:
+- In `runWebSearch(params)`, wrap primary provider execution in `try/catch`.
+- On primary failure, resolve runtime providers and retry with alternates (excluding primary).
+- Keep original error if all fallback providers fail.
+
+Environment requirements:
+- Tavily key must be available via:
+  - `TAVILY_API_KEY` (env), or
+  - `plugins.entries.tavily.config.webSearch.apiKey`
+- This host uses:
+  - `/root/.openclaw/.env` with `TAVILY_API_KEY=...`
+  - `EnvironmentFile=-/root/.openclaw/.env` in gateway/node systemd user units
+
+Verification:
+- `openclaw gateway call health --timeout 20000 --json`
+- Trigger a web-search-heavy cron turn and confirm no hard-stop when Brave is rate-limited.
+- `bash /root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh --check`
+
 ## Service / Config Hotfixes
 These live outside the npm package tree and usually survive package upgrades, but may be overwritten by service reinstall/doctor force actions.
 
@@ -220,6 +246,7 @@ After every successful hotfix + verification cycle, publish the current assets t
 
 Required assets:
 - `/root/.openclaw/workspace/HOTFIX-PLAYBOOK.md`
+- `/root/.openclaw/workspace/HOTFIX-PLAYBOOK.zh-TW.md`
 - `/root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh`
 
 Archive rule:

@@ -10,7 +10,8 @@ MODE="${1:---check}"
 OPENCLAW_ROOT="/usr/lib/node_modules/openclaw"
 DIST_DIR="${OPENCLAW_ROOT}/dist"
 PROVIDER_FILE="${OPENCLAW_ROOT}/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js"
-HOTFIX_VERSION="2026.04.01.1"
+WEB_SEARCH_RUNTIME_FILE="${DIST_DIR}/runtime-BiQlOaAl.js"
+HOTFIX_VERSION="2026.04.01.2"
 HOTFIX_REPO_URL="https://github.com/jackykit0116/openclaw-hotfix.git"
 
 log() {
@@ -136,6 +137,12 @@ check_gateway_handshake_runtime_hotfix() {
   rg -q 'const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15e3;' "${gateway_files[@]}"     && (rg -q 'OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS' "${gateway_files[@]}" || rg -q 'OPENCLAW_HANDSHAKE_TIMEOUT_MS' "${gateway_files[@]}")     && rg -q 'OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS' "${gateway_files[@]}"
 }
 
+check_web_search_provider_fallback_hotfix() {
+  require_file "$WEB_SEARCH_RUNTIME_FILE"
+  rg -q 'web_search primary provider failed' "$WEB_SEARCH_RUNTIME_FILE" \
+    && rg -F -q 'const fallbackProviders = sortWebSearchProvidersForAutoDetect(resolveRuntimeWebSearchProviders({' "$WEB_SEARCH_RUNTIME_FILE"
+}
+
 
 backup_file() {
   local f="$1"
@@ -205,14 +212,21 @@ apply_gateway_handshake_runtime_hotfix() {
   perl -0777 -i -pe 's/const DEFAULT_HANDSHAKE_TIMEOUT_MS = 1e4;/const DEFAULT_HANDSHAKE_TIMEOUT_MS = 15e3;/g; s/process\.env\.OPENCLAW_HANDSHAKE_TIMEOUT_MS \|\| process\.env\.VITEST && process\.env\.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS/process.env.OPENCLAW_GATEWAY_HANDSHAKE_TIMEOUT_MS || process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS/g' "${gateway_files[@]}"
 }
 
+apply_web_search_provider_fallback_hotfix() {
+  require_file "$WEB_SEARCH_RUNTIME_FILE"
+  backup_file "$WEB_SEARCH_RUNTIME_FILE"
+  perl -0777 -i -pe 's/async function runWebSearch\(params\) \{\n\tconst resolved = resolveWebSearchDefinition\(\{\n\t\t\.\.\.params,\n\t\tpreferRuntimeProviders: true\n\t\}\);\n\tif \(!resolved\) throw new Error\("web_search is disabled or no provider is available\."\);\n\treturn \{\n\t\tprovider: resolved\.provider\.id,\n\t\tresult: await resolved\.definition\.execute\(params\.args\)\n\t\};\n\}/async function runWebSearch(params) {\n\tconst resolved = resolveWebSearchDefinition({\n\t\t...params,\n\t\tpreferRuntimeProviders: true\n\t});\n\tif (!resolved) throw new Error(\"web_search is disabled or no provider is available.\");\n\ttry {\n\t\treturn {\n\t\t\tprovider: resolved.provider.id,\n\t\t\tresult: await resolved.definition.execute(params.args)\n\t\t};\n\t} catch (primaryError) {\n\t\tconst fallbackProviders = sortWebSearchProvidersForAutoDetect(resolveRuntimeWebSearchProviders({\n\t\t\tconfig: params?.config,\n\t\t\tbundledAllowlistCompat: true\n\t\t})).filter((entry) => entry.id !== resolved.provider.id);\n\t\tfor (const fallbackProvider of fallbackProviders) {\n\t\t\ttry {\n\t\t\t\tconst fallbackDefinition = fallbackProvider.createTool({\n\t\t\t\t\tconfig: params?.config,\n\t\t\t\t\tsearchConfig: resolveSearchConfig(params?.config),\n\t\t\t\t\truntimeMetadata: getActiveRuntimeWebToolsMetadata()?.search\n\t\t\t\t});\n\t\t\t\tif (!fallbackDefinition) continue;\n\t\t\t\tlogVerbose(`web_search primary provider failed (${resolved.provider.id}); falling back to \"${fallbackProvider.id}\"`);\n\t\t\t\treturn {\n\t\t\t\t\tprovider: fallbackProvider.id,\n\t\t\t\t\tresult: await fallbackDefinition.execute(params.args)\n\t\t\t\t};\n\t\t\t} catch {\n\t\t\t\tcontinue;\n\t\t\t}\n\t\t}\n\t\tthrow primaryError;\n\t}\n}/s' "$WEB_SEARCH_RUNTIME_FILE"
+}
+
 print_check_summary() {
-  local small_status usage_status cron_status closed_audit_status gateway_rpc_status gateway_handshake_status
+  local small_status usage_status cron_status closed_audit_status gateway_rpc_status gateway_handshake_status web_search_fallback_status
   small_status="FAIL"
   usage_status="FAIL"
   cron_status="FAIL"
   closed_audit_status="FAIL"
   gateway_rpc_status="FAIL"
   gateway_handshake_status="FAIL"
+  web_search_fallback_status="FAIL"
 
   check_small_model_hotfix && small_status="OK"
   check_include_usage_hotfix && usage_status="OK"
@@ -220,6 +234,7 @@ print_check_summary() {
   check_closed_system_audit_hotfix && closed_audit_status="OK"
   check_gateway_rpc_config_hotfix && gateway_rpc_status="OK"
   check_gateway_handshake_runtime_hotfix && gateway_handshake_status="OK"
+  check_web_search_provider_fallback_hotfix && web_search_fallback_status="OK"
 
   log "OpenClaw version: $(openclaw --version 2>/dev/null || echo unknown)"
   log "Hotfix version: ${HOTFIX_VERSION}"
@@ -229,8 +244,9 @@ print_check_summary() {
   log "cron.run timeout hotfix: ${cron_status}"
   log "gateway-rpc config hotfix: ${gateway_rpc_status}"
   log "gateway handshake/runtime hotfix: ${gateway_handshake_status}"
+  log "web_search provider fallback hotfix: ${web_search_fallback_status}"
 
-  [[ "$small_status" == "OK" && "$closed_audit_status" == "OK" && "$usage_status" == "OK" && "$cron_status" == "OK" && "$gateway_rpc_status" == "OK" && "$gateway_handshake_status" == "OK" ]]
+  [[ "$small_status" == "OK" && "$closed_audit_status" == "OK" && "$usage_status" == "OK" && "$cron_status" == "OK" && "$gateway_rpc_status" == "OK" && "$gateway_handshake_status" == "OK" && "$web_search_fallback_status" == "OK" ]]
 }
 
 main() {
@@ -276,6 +292,10 @@ main() {
       if ! check_gateway_handshake_runtime_hotfix; then
         log "re-applying gateway handshake/runtime hotfix"
         apply_gateway_handshake_runtime_hotfix
+      fi
+      if ! check_web_search_provider_fallback_hotfix; then
+        log "re-applying web_search provider fallback hotfix"
+        apply_web_search_provider_fallback_hotfix
       fi
 
       print_check_summary

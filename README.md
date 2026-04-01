@@ -9,7 +9,7 @@ Structure:
 
 Current snapshot:
 - OpenClaw: 2026.3.31
-- Hotfix: 2026.04.01.1
-- Updated: 2026-04-01T04:39:23Z
+- Hotfix: 2026.04.01.2
+- Updated: 2026-04-01T07:23:14Z
 - Owner: Jacky Kit
 - Contact: https://jackykit.com
