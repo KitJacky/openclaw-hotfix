@@ -8,8 +8,8 @@ Structure:
 - metadata/manifest.json: machine-readable index
 
 Current snapshot:
-- OpenClaw: 2026.3.28
-- Hotfix: 2026.03.30.1
-- Updated: 2026-03-30T04:37:16Z
+- OpenClaw: 2026.3.31
+- Hotfix: 2026.04.01.1
+- Updated: 2026-04-01T04:39:23Z
 - Owner: Jacky Kit
 - Contact: https://jackykit.com

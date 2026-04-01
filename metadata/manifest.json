@@ -1,8 +1,8 @@
 {
   "latest": {
-    "openclaw_version": "2026.3.28",
-    "hotfix_version": "2026.03.30.1",
-    "updated_at": "2026-03-30T04:37:16Z"
+    "openclaw_version": "2026.3.31",
+    "hotfix_version": "2026.04.01.1",
+    "updated_at": "2026-04-01T04:39:23Z"
   },
   "versions": {
     "2026.3.28": {
@@ -12,6 +12,15 @@
         "versions/2026.3.28/openclaw-post-update-hotfix.sh",
         "versions/2026.3.28/HOTFIX-PLAYBOOK.md",
         "versions/2026.3.28/HOTFIX-PLAYBOOK.zh-TW.md"
+      ]
+    },
+    "2026.3.31": {
+      "hotfix_version": "2026.04.01.1",
+      "updated_at": "2026-04-01T04:39:23Z",
+      "files": [
+        "versions/2026.3.31/openclaw-post-update-hotfix.sh",
+        "versions/2026.3.31/HOTFIX-PLAYBOOK.md",
+        "versions/2026.3.31/HOTFIX-PLAYBOOK.zh-TW.md"
       ]
     }
   }
