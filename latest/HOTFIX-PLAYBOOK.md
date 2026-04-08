@@ -110,6 +110,8 @@ Required patched logic:
 - In `runWebSearch(params)`, wrap primary provider execution in `try/catch`.
 - On primary failure, resolve runtime providers and retry with alternates (excluding primary).
 - Keep original error if all fallback providers fail.
+- Even when `tools.web.search.provider` is explicitly set (for example `tavily`), fallback should still be allowed when multiple providers are available.
+  - Explicit provider is treated as priority order, not a hard single-provider lock.
 - Add per-provider cooldown queue to reduce provider-side 429 bursts:
   - `resolveWebSearchCooldownMs()`
   - `enqueueWebSearchWithCooldown(providerId, execute)`

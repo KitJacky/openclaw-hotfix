@@ -11,7 +11,7 @@ OPENCLAW_ROOT="/usr/lib/node_modules/openclaw"
 DIST_DIR="${OPENCLAW_ROOT}/dist"
 PROVIDER_FILE="${OPENCLAW_ROOT}/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js"
 WEB_SEARCH_RUNTIME_FILE=""
-HOTFIX_VERSION="2026.04.08.2"
+HOTFIX_VERSION="2026.04.08.4"
 HOTFIX_REPO_URL="https://github.com/jackykit0116/openclaw-hotfix.git"
 
 log() {
@@ -165,7 +165,9 @@ check_web_search_provider_fallback_hotfix() {
   rg -q 'resolveWebSearchCooldownMs' "$WEB_SEARCH_RUNTIME_FILE" \
     && rg -q 'enqueueWebSearchWithCooldown' "$WEB_SEARCH_RUNTIME_FILE" \
     && rg -q 'OPENCLAW_WEB_SEARCH_COOLDOWN_MS' "$WEB_SEARCH_RUNTIME_FILE" \
-    && rg -q 'enqueueWebSearchWithCooldown\(.*definition\.execute\(params\.args\)\)' "$WEB_SEARCH_RUNTIME_FILE"
+    && rg -q 'enqueueWebSearchWithCooldown\(.*definition\.execute\(params\.args\)\)' "$WEB_SEARCH_RUNTIME_FILE" \
+    && rg -q 'const allowFallback = candidates\.length > 1;' "$WEB_SEARCH_RUNTIME_FILE" \
+    && rg -q 'if \(!allowFallback\) throw error;' "$WEB_SEARCH_RUNTIME_FILE"
 }
 
 check_telegram_setup_entry_hotfix() {
@@ -293,6 +295,10 @@ PY
   fi
   # Step 2: always route provider execution through cooldown queue.
   perl -0777 -i -pe 's/result: await resolved\.definition\.execute\(params\.args\)/result: await enqueueWebSearchWithCooldown(resolved.provider.id, () => resolved.definition.execute(params.args))/g; s/result: await fallbackDefinition\.execute\(params\.args\)/result: await enqueueWebSearchWithCooldown(fallbackProvider.id, () => fallbackDefinition.execute(params.args))/g; s/result: await definition\.execute\(params\.args\)/result: await enqueueWebSearchWithCooldown(candidate.id, () => definition.execute(params.args))/g' "$WEB_SEARCH_RUNTIME_FILE"
+  # Step 3: always try fallback providers when more than one candidate is available.
+  perl -0777 -i -pe 's/function hasExplicitWebSearchSelection\(params\) \{\n\tif \(params\.providerId\?\.trim\(\)\) return true;\n\tconst availableProviderIds = new Set\(\(params\.providers \?\? \[\]\)\.map\(\(provider\) => normalizeLowercaseStringOrEmpty\(provider\.id\)\)\);\n\tconst configuredProviderId = params\.search && "provider" in params\.search && typeof params\.search\.provider === "string" \? normalizeLowercaseStringOrEmpty\(params\.search\.provider\) : "";\n\tif \(configuredProviderId && availableProviderIds\.has\(configuredProviderId\)\) return true;\n\tconst runtimeConfiguredId = normalizeOptionalLowercaseString\(params\.runtimeWebSearch\?\.selectedProvider \?\? params\.runtimeWebSearch\?\.providerConfigured\);\n\tif \(params\.runtimeWebSearch\?\.providerSource === "configured" && runtimeConfiguredId && availableProviderIds\.has\(runtimeConfiguredId\)\) return true;\n\treturn false;\n\}/function hasExplicitWebSearchSelection(params) {\n\tif (params.providerId?.trim()) return true;\n\tconst availableProviderIds = new Set((params.providers ?? []).map((provider) => normalizeLowercaseStringOrEmpty(provider.id)));\n\tconst configuredProviderId = params.search && "provider" in params.search && typeof params.search.provider === "string" ? normalizeLowercaseStringOrEmpty(params.search.provider) : "";\n\tif (configuredProviderId && availableProviderIds.has(configuredProviderId)) return true;\n\tconst runtimeConfiguredId = normalizeOptionalLowercaseString(params.runtimeWebSearch?.selectedProvider ?? params.runtimeWebSearch?.providerConfigured);\n\tif (params.runtimeWebSearch?.providerSource === "configured" && runtimeConfiguredId && availableProviderIds.has(runtimeConfiguredId)) return true;\n\treturn false;\n}\nfunction isFallbackEligibleWebSearchError(error) {\n\tconst message = error instanceof Error ? error.message : String(error ?? "");\n\treturn \/\\\\b(429|432|5\\\\d\\\\d)\\\\b\/i.test(message) || \/rate.?limit|quota|exceed|timeout|timed out|fetch failed|econn|enotfound|eai_again|network\/i.test(message);\n}/s' "$WEB_SEARCH_RUNTIME_FILE"
+  perl -0777 -i -pe 's/const allowFallback = !hasExplicitWebSearchSelection\(\{\n\t\tsearch,\n\t\truntimeWebSearch,\n\t\tproviderId: params\.providerId,\n\t\tproviders: candidates\n\t\}\);/const allowFallback = candidates.length > 1;/s' "$WEB_SEARCH_RUNTIME_FILE"
+  perl -0777 -i -pe 's/if \(!allowFallback && !isFallbackEligibleWebSearchError\(error\)\) throw error;/if (!allowFallback) throw error;/g' "$WEB_SEARCH_RUNTIME_FILE"
 }
 
 apply_telegram_setup_entry_hotfix() {

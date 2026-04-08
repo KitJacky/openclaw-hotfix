@@ -68,6 +68,8 @@ Owner：Jacky Kit / https://jackykit.com
 必要邏輯：
 - `runWebSearch(params)` 主供應商失敗後，自動改試其他可用 provider（先排除原 provider）
 - 所有 provider 都失敗時，才回拋原錯誤
+- 即使 `tools.web.search.provider` 有明確指定（例如 `tavily`），只要有多個 provider 可用，也必須允許 fallback：
+  - 明確指定僅代表優先順序，不是「只能用單一供應商」。
 - 加入每個 provider 的冷卻佇列，避免瞬間連發造成 429：
   - `resolveWebSearchCooldownMs()`
   - `enqueueWebSearchWithCooldown(providerId, execute)`
