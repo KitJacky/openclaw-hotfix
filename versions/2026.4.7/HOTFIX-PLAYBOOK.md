@@ -260,7 +260,7 @@ Patch target:
 - `/usr/lib/node_modules/openclaw/dist/extensions/telegram/setup-entry.js`
 
 Required patched logic:
-- `plugin.specifier = "./channel-plugin-api.js"`
+- `plugin.specifier = "./api.js"`
 - `plugin.exportName = "telegramSetupPlugin"`
 
 Verification:

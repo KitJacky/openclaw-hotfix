@@ -11,7 +11,7 @@ OPENCLAW_ROOT="/usr/lib/node_modules/openclaw"
 DIST_DIR="${OPENCLAW_ROOT}/dist"
 PROVIDER_FILE="${OPENCLAW_ROOT}/node_modules/@mariozechner/pi-ai/dist/providers/openai-completions.js"
 WEB_SEARCH_RUNTIME_FILE=""
-HOTFIX_VERSION="2026.04.08.4"
+HOTFIX_VERSION="2026.04.08.5"
 HOTFIX_REPO_URL="https://github.com/jackykit0116/openclaw-hotfix.git"
 
 log() {
@@ -173,7 +173,7 @@ check_web_search_provider_fallback_hotfix() {
 check_telegram_setup_entry_hotfix() {
   local setup_entry_file="${DIST_DIR}/extensions/telegram/setup-entry.js"
   [[ -f "$setup_entry_file" ]] || return 0
-  rg -q 'specifier:\s*"\./channel-plugin-api\.js"' "$setup_entry_file" \
+  rg -q 'specifier:\s*"\./api\.js"' "$setup_entry_file" \
     && rg -q 'exportName:\s*"telegramSetupPlugin"' "$setup_entry_file"
 }
 
@@ -305,7 +305,7 @@ apply_telegram_setup_entry_hotfix() {
   local setup_entry_file="${DIST_DIR}/extensions/telegram/setup-entry.js"
   [[ -f "$setup_entry_file" ]] || return 0
   backup_file "$setup_entry_file"
-  perl -0777 -i -pe 's/specifier:\s*"\.\/src\/channel\.setup\.js",\s*exportName:\s*"telegramSetupPlugin"/specifier: ".\/channel-plugin-api.js",\n\t\texportName: "telegramSetupPlugin"/g' "$setup_entry_file"
+  perl -0777 -i -pe 's/specifier:\s*"\.\/src\/channel\.setup\.js",\s*exportName:\s*"telegramSetupPlugin"/specifier: ".\/api.js",\n\t\texportName: "telegramSetupPlugin"/g; s/specifier:\s*"\.\/channel-plugin-api\.js",\s*exportName:\s*"telegramSetupPlugin"/specifier: ".\/api.js",\n\t\texportName: "telegramSetupPlugin"/g' "$setup_entry_file"
 }
 
 print_check_summary() {

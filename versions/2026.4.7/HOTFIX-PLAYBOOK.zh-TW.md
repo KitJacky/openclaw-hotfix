@@ -138,7 +138,7 @@ Owner：Jacky Kit / https://jackykit.com
 - `/usr/lib/node_modules/openclaw/dist/extensions/telegram/setup-entry.js`
 
 必要修補：
-- `plugin.specifier = "./channel-plugin-api.js"`
+- `plugin.specifier = "./api.js"`
 - `plugin.exportName = "telegramSetupPlugin"`
 
 驗證：
