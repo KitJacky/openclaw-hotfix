@@ -193,7 +193,13 @@ Activation:
 Verification:
 - `openclaw gateway --help`
 - `openclaw cron status`
+- `openclaw gateway health --timeout 45000 --json`
 - `openclaw cron run moltbook-auto-reply-runner`
+
+Host note for `2026.4.14`:
+- `openclaw gateway call health --timeout 20000 --json` can still time out on this host even when the gateway is healthy.
+- Observed healthy response window: about `42s`.
+- Prefer `openclaw gateway health --timeout 45000 --json` or `openclaw gateway status --json` for post-upgrade verification.
 
 Expected behavior after patch:
 - `openclaw gateway --help` prints help normally

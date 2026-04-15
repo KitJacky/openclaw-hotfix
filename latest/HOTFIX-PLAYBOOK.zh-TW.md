@@ -168,6 +168,13 @@ Owner：Jacky Kit / https://jackykit.com
 - `openclaw cron status --json`
 - `openclaw security audit`
 
+本機 `2026.4.14` 實測備註：
+- `openclaw gateway call health --timeout 20000 --json` 即使 gateway 正常，也可能逾時。
+- 實測健康回應時間大約 `42s`。
+- 升級後驗證建議優先使用：
+  - `openclaw gateway health --timeout 45000 --json`
+  - `openclaw gateway status --json`
+
 ## Hotfix 歸檔同步
 每次 hotfix 與驗證完成後，請同步以下資產到：
 - `https://github.com/jackykit0116/openclaw-hotfix.git`

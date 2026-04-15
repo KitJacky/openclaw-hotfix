@@ -46,5 +46,5 @@ Hotfix 主題：
 Current snapshot:
 - OpenClaw: 2026.4.14
 - Hotfix: 2026.04.15.1
-- Updated: 2026-04-15T05:06:42Z
+- Updated: 2026-04-15T05:07:11Z
 - Owner / Contact: Jacky Kit - https://jackykit.com

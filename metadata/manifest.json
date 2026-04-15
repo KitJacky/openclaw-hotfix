@@ -2,7 +2,7 @@
   "latest": {
     "openclaw_version": "2026.4.14",
     "hotfix_version": "2026.04.15.1",
-    "updated_at": "2026-04-15T05:06:42Z"
+    "updated_at": "2026-04-15T05:07:11Z"
   },
   "versions": {
     "2026.3.28": {
@@ -61,7 +61,7 @@
     },
     "2026.4.14": {
       "hotfix_version": "2026.04.15.1",
-      "updated_at": "2026-04-15T05:06:42Z",
+      "updated_at": "2026-04-15T05:07:11Z",
       "files": [
         "versions/2026.4.14/openclaw-post-update-hotfix.sh",
         "versions/2026.4.14/HOTFIX-PLAYBOOK.md",
