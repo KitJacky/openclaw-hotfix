@@ -44,7 +44,7 @@ Hotfix 主題：
 - Hotfix 歸檔與單向發布流程
 
 Current snapshot:
-- OpenClaw: 2026.4.12
-- Hotfix: 2026.04.13.1
-- Updated: 2026-04-14T03:22:28Z
+- OpenClaw: 2026.4.14
+- Hotfix: 2026.04.15.1
+- Updated: 2026-04-15T05:06:42Z
 - Owner / Contact: Jacky Kit - https://jackykit.com
