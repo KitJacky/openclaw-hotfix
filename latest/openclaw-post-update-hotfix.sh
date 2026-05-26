@@ -21,7 +21,7 @@ else
 fi
 WEB_SEARCH_RUNTIME_FILE=""
 OPENCLAW_BIN="${OPENCLAW_BIN:-openclaw}"
-HOTFIX_VERSION="2026.05.11.1"
+HOTFIX_VERSION="2026.05.26.1"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -249,7 +249,8 @@ check_web_search_provider_fallback_hotfix() {
   rg -q 'resolveWebSearchCooldownMs' "$WEB_SEARCH_RUNTIME_FILE" \
     && rg -q 'enqueueWebSearchWithCooldown' "$WEB_SEARCH_RUNTIME_FILE" \
     && rg -q 'OPENCLAW_WEB_SEARCH_COOLDOWN_MS' "$WEB_SEARCH_RUNTIME_FILE" \
-    && rg -q 'const allowFallback = candidates\.length > 1;' "$WEB_SEARCH_RUNTIME_FILE"
+    && rg -q 'const allowFallback = candidates\.length > 1;' "$WEB_SEARCH_RUNTIME_FILE" \
+    && rg -q 'await enqueueWebSearchWithCooldown\(candidate\.id' "$WEB_SEARCH_RUNTIME_FILE"
 }
 
 check_telegram_setup_entry_hotfix() {
@@ -431,7 +432,7 @@ path.write_text(text)
 PY
   fi
 
-  perl -0777 -i -pe 's/const allowFallback = !hasExplicitWebSearchSelection\(\{\n\t\tsearch,\n\t\truntimeWebSearch,\n\t\tproviderId: params\.providerId,\n\t\tproviders: candidates\n\t\}\);/const allowFallback = candidates.length > 1;/s; s/result: await definition\.execute\(params\.args\)/result: await enqueueWebSearchWithCooldown(candidate.id, () => definition.execute(params.args))/g' "$WEB_SEARCH_RUNTIME_FILE"
+  perl -0777 -i -pe 's/const allowFallback = !hasExplicitWebSearchSelection\(\{\n\t\tsearch,\n\t\truntimeWebSearch,\n\t\tproviderId: params\.providerId,\n\t\tproviders: candidates\n\t\}\);/const allowFallback = candidates.length > 1;/s; s/result: await definition\.execute\(params\.args\)/result: await enqueueWebSearchWithCooldown(candidate.id, () => definition.execute(params.args))/g; s/const executed = await definition\.execute\(params\.args, \{ signal: params\.signal \}\);/const executed = await enqueueWebSearchWithCooldown(candidate.id, () => definition.execute(params.args, { signal: params.signal }));/g' "$WEB_SEARCH_RUNTIME_FILE"
 }
 
 apply_telegram_setup_entry_hotfix() {

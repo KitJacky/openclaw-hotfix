@@ -18,6 +18,7 @@ When OpenClaw is updated, read this file first, then run the post-update checkli
 ### 2026.5.22
 - Upgraded globally from **`2026.5.7` → `2026.5.22`** via `npm i -g openclaw@latest`, then **`openclaw-post-update-hotfix.sh --apply`** and **`--check`** (all OK).
 - **pi-ai npm scope migration:** Streaming `include_usage` hotfix targets **`@earendil-works/pi-ai`** (formerly **`@mariozechner/pi-ai`**). Host script [`workspace/scripts/openclaw-post-update-hotfix.sh`](/root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh) resolves either path automatically.
+- **Hotfix script tightened to `2026.05.26.1`:** `web_search` cooldown validation now requires provider execution to call `enqueueWebSearchWithCooldown(candidate.id, ...)`, not merely that the helper exists in the bundle. This fixed a false-positive check after `2026.5.22`.
 - **`openclaw doctor --non-interactive --fix`** completed; systemd user **`openclaw-gateway.service`** / **`openclaw-node.service`** restarted. Immediately after gateway restart, `gateway health` can return **1006** until the Gateway reaches **ready**; retry after readiness.
 - Run OpenClaw CLI with **system Node 22** on PATH (**`/usr/bin` before Cursor-bundled Node v20**) so `/usr/bin/openclaw` does not abort with minimum-version errors.
 - Host verification snapshot (after warm-up):
@@ -56,6 +57,18 @@ When OpenClaw is updated, read this file first, then run the post-update checkli
 ## Package Hotfixes
 These patch files under `/usr/lib/node_modules/openclaw/...`.
 They are likely to be overwritten by package upgrades and must be rechecked after every update.
+
+Current package/config guard status on `2026.5.22 (a374c3a)` with hotfix script `2026.05.26.1`:
+- Small-model audit severity: patched (`critical` downgrade removed; finding remains visible as `info`).
+- OpenAI streaming usage: patched in `@earendil-works/pi-ai`; legacy `@mariozechner/pi-ai` remains supported by the script.
+- LLM idle timeout / thinking default: valid via config (`models.providers.local.timeoutSeconds = 900`, `thinkingDefault = "low"`).
+- `cron.run` timeout: current upstream default is `600000` (10m), accepted by the guard; script can still raise older/changed bundles to the local guard shape when required.
+- Closed-system audit downgrade: patched (`warn`/conditional critical checks listed below are `info`).
+- Gateway RPC config path: current call path is compatible; no legacy forced injection patch required.
+- `web_search` fallback + cooldown: patched; fallback is allowed when more than one provider is available and provider execution is routed through `enqueueWebSearchWithCooldown(candidate.id, ...)`.
+- MiniMax fallback suppression: config valid (`plugins.entries.minimax.enabled = false`).
+- Telegram `/new` and `/reset` stall mitigation: config valid (`agents.defaults.startupContext.enabled = false`).
+- Telegram setup-entry compatibility: current upstream layout is valid (`setup-plugin-api.js` + `secret-contract-api.js`).
 
 ### 1) Small-model audit severity downgrade
 Reason:
@@ -162,7 +175,8 @@ Reason:
 - `2026.4.14` upstream now includes provider fallback in `runWebSearch(params)`, but it still lacks the per-provider cooldown guard needed on this host.
 
 Patch target:
-- `/usr/lib/node_modules/openclaw/dist/runtime-BiQlOaAl.js`
+- `/usr/lib/node_modules/openclaw/dist/runtime-*.js`
+- The exact hashed bundle changes per release; the hotfix script locates the bundle containing `async function runWebSearch(params)`.
 
 Required patched logic:
 - Keep fallback enabled when multiple providers are available, including explicitly selected providers on this host.
@@ -170,6 +184,7 @@ Required patched logic:
   - `resolveWebSearchCooldownMs()`
   - `enqueueWebSearchWithCooldown(providerId, execute)`
 - Route provider execution through the cooldown queue.
+- Checker must confirm an actual call such as `await enqueueWebSearchWithCooldown(candidate.id, ...)`; helper presence alone is insufficient.
 
 Environment requirements:
 - Tavily key must be available via:

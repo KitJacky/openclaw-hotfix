@@ -18,6 +18,7 @@ Owner：Jacky Kit / https://jackykit.com
 ### 2026.5.22
 - 透過 **`npm i -g openclaw@latest`** 將全域套件從 **`2026.5.7` 升到 `2026.5.22`**，接著 **`openclaw-post-update-hotfix.sh --apply`**／**`--check`**（皆通過）。
 - **pi-ai npm scope 變更：** `include_usage` hotfix 的目標改為 **`@earendil-works/pi-ai`**（舊：`@mariozechner/pi-ai`）。主機腳本 [`workspace/scripts/openclaw-post-update-hotfix.sh`](/root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh) 會自動嘗試兩條路徑。
+- **Hotfix 腳本收緊到 `2026.05.26.1`：** `web_search` cooldown 驗證現在必須確認 provider execution 有實際呼叫 `enqueueWebSearchWithCooldown(candidate.id, ...)`，不能只檢查 helper 是否存在。這修正了 `2026.5.22` 後的一個 false-positive check。
 - 已執行 **`openclaw doctor --non-interactive --fix`**；並重啟 systemd user **`openclaw-gateway.service`**／**`openclaw-node.service`**。Gateway **剛重啟後** `gateway health` 可能短暫出現 **WebSocket 1006**；待 log 顯示 **ready** 後再重試即可。
 - 在 Agent／IDE 環境執行 `openclaw` 時，請讓 PATH 優先 **`/usr/bin` 的 Node 22**，避免 Cursor 內建的 **Node v20** 排到前面而觸發「需要 Node ≥22.12」並直接退出。
 - 驗證快照（warm 後）：
@@ -59,6 +60,18 @@ Owner：Jacky Kit / https://jackykit.com
 
 ## 套件內 Hotfix
 以下修補位於 `/usr/lib/node_modules/openclaw/...`，升級後通常會被覆蓋，必須重新檢查。
+
+目前 `2026.5.22 (a374c3a)` 搭配 hotfix 腳本 `2026.05.26.1` 的狀態：
+- Small-model audit severity：已修補（不再升為 `critical`，仍以 `info` 可見）。
+- OpenAI streaming usage：已在 `@earendil-works/pi-ai` 修補；腳本仍支援舊 `@mariozechner/pi-ai` 路徑。
+- LLM idle timeout / thinking default：設定有效（`models.providers.local.timeoutSeconds = 900`、`thinkingDefault = "low"`）。
+- `cron.run` timeout：目前上游預設為 `600000`（10 分鐘），guard 接受；若舊版或日後 bundle 改動，腳本仍可重套本機 timeout guard。
+- Closed-system audit downgrade：已修補（下列 `warn` / conditional critical 項目均降為 `info`）。
+- Gateway RPC config path：目前 call path 相容，不需要強行套舊版 config injection。
+- `web_search` fallback + cooldown：已修補；多 provider 可用時允許 fallback，且 provider execution 已經走 `enqueueWebSearchWithCooldown(candidate.id, ...)`。
+- MiniMax fallback suppression：設定有效（`plugins.entries.minimax.enabled = false`）。
+- Telegram `/new` 與 `/reset` 卡死緩解：設定有效（`agents.defaults.startupContext.enabled = false`）。
+- Telegram setup-entry compatibility：目前上游 layout 有效（`setup-plugin-api.js` + `secret-contract-api.js`）。
 
 ### 1) Small-model audit severity downgrade
 目的：
@@ -125,7 +138,8 @@ Owner：Jacky Kit / https://jackykit.com
 - `2026.4.14+` 上游已內建基本 provider fallback，但本機仍需要每個 provider 的冷卻佇列，否則高頻 cron 仍會撞 429
 
 目標檔案：
-- `/usr/lib/node_modules/openclaw/dist/runtime-BiQlOaAl.js`
+- `/usr/lib/node_modules/openclaw/dist/runtime-*.js`
+- 實際 hash bundle 每版都可能不同；hotfix 腳本會尋找包含 `async function runWebSearch(params)` 的檔案。
 
 必要邏輯：
 - 在多個 provider 可用時保持 fallback 能力；本機允許明確指定 provider 時仍可 fallback
@@ -133,6 +147,7 @@ Owner：Jacky Kit / https://jackykit.com
   - `resolveWebSearchCooldownMs()`
   - `enqueueWebSearchWithCooldown(providerId, execute)`
 - provider 執行都走同一套冷卻機制
+- Checker 必須確認實際存在 `await enqueueWebSearchWithCooldown(candidate.id, ...)`；只看到 helper 函式不代表 cooldown 已生效。
 
 環境需求：
 - `TAVILY_API_KEY` 必須可讀取（本機放在 `/root/.openclaw/.env`）
