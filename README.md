@@ -21,7 +21,7 @@ Hotfix topics:
 - Hotfix archival + one-way publish workflow
 
 Project links:
-- Cheese Cat OpenClaw · Public Interface: https://cheesecat.net
+- Cheese Cat 🐯 OpenClaw · Public Interface: https://cheesecat.net
 - Jacky Kit: https://jackykit.com
 - Donate: https://cheesecat.net/donate
 
@@ -45,6 +45,6 @@ Hotfix 主題：
 
 Current snapshot:
 - OpenClaw: 2026.5.22
-- Hotfix: 2026.05.26.1
-- Updated: 2026-05-26T03:58:24Z
+- Hotfix: 2026.06.08.1
+- Updated: 2026-06-08T04:54:35Z
 - Owner / Contact: Jacky Kit - https://jackykit.com

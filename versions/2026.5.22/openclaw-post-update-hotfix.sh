@@ -21,7 +21,10 @@ else
 fi
 WEB_SEARCH_RUNTIME_FILE=""
 OPENCLAW_BIN="${OPENCLAW_BIN:-openclaw}"
-HOTFIX_VERSION="2026.05.26.1"
+HOTFIX_VERSION="2026.06.08.1"
+WEB_SEARCH_SEARXNG_ORDER=15
+WEB_SEARCH_TAVILY_ORDER=25
+UNDICI_CLIENT_H1="${OPENCLAW_ROOT}/node_modules/undici/lib/dispatcher/client-h1.js"
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -189,6 +192,42 @@ sys.exit(0 if value is False else 1)
 PY
 }
 
+check_tavily_standalone_tool_denied_hotfix() {
+  require_file "$OPENCLAW_CONFIG"
+  python3 - "$OPENCLAW_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+deny = data.get("tools", {}).get("deny", [])
+sys.exit(0 if isinstance(deny, list) and "tavily_search" in deny else 1)
+PY
+}
+
+check_undici_paused_assert_hotfix() {
+  require_file "$UNDICI_CLIENT_H1"
+  rg -q 'openclaw-hotfix: undici execute paused requeue' "$UNDICI_CLIENT_H1" \
+    && rg -q 'openclaw-hotfix: undici finish resume if paused' "$UNDICI_CLIENT_H1" \
+    && rg -q 'openclaw-hotfix: undici readable skip while paused' "$UNDICI_CLIENT_H1" \
+    && ! rg -q 'assert\(!this\.paused\)' "$UNDICI_CLIENT_H1"
+}
+
+check_gateway_max_concurrent_hotfix() {
+  require_file "$OPENCLAW_CONFIG"
+  python3 - "$OPENCLAW_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+value = data.get("agents", {}).get("defaults", {}).get("maxConcurrent")
+sys.exit(0 if isinstance(value, int) and value <= 3 else 1)
+PY
+}
+
 check_cron_run_timeout_hotfix() {
   local cron_file
   cron_file="$(find_cron_cli_file)"
@@ -251,6 +290,36 @@ check_web_search_provider_fallback_hotfix() {
     && rg -q 'OPENCLAW_WEB_SEARCH_COOLDOWN_MS' "$WEB_SEARCH_RUNTIME_FILE" \
     && rg -q 'const allowFallback = candidates\.length > 1;' "$WEB_SEARCH_RUNTIME_FILE" \
     && rg -q 'await enqueueWebSearchWithCooldown\(candidate\.id' "$WEB_SEARCH_RUNTIME_FILE"
+}
+
+find_searxng_search_provider_file() {
+  find "${DIST_DIR}" -maxdepth 1 -name 'searxng-search-provider-*.js' -type f -print -quit
+}
+
+find_tavily_search_provider_file() {
+  find "${DIST_DIR}" -maxdepth 1 -name 'tavily-search-provider-*.js' -type f -print -quit
+}
+
+find_tavily_web_search_contract_file() {
+  local f="${DIST_DIR}/extensions/tavily/web-search-contract-api.js"
+  [[ -f "$f" ]] && printf '%s\n' "$f"
+}
+
+check_web_search_provider_order_hotfix() {
+  local searxng_file tavily_provider_file tavily_contract_file
+  searxng_file="$(find_searxng_search_provider_file)"
+  tavily_provider_file="$(find_tavily_search_provider_file)"
+  tavily_contract_file="$(find_tavily_web_search_contract_file)"
+
+  [[ -n "$searxng_file" ]] || { log "searxng search provider bundle not found"; return 1; }
+  [[ -n "$tavily_provider_file" ]] || { log "tavily search provider bundle not found"; return 1; }
+  [[ -n "$tavily_contract_file" ]] || { log "tavily web-search contract bundle not found"; return 1; }
+
+  rg -q "autoDetectOrder: ${WEB_SEARCH_SEARXNG_ORDER}," "$searxng_file" \
+    && rg -q "openclaw-hotfix: web_search provider order searxng=${WEB_SEARCH_SEARXNG_ORDER}" "$searxng_file" \
+    && rg -q "autoDetectOrder: ${WEB_SEARCH_TAVILY_ORDER}," "$tavily_provider_file" \
+    && rg -q "autoDetectOrder: ${WEB_SEARCH_TAVILY_ORDER}," "$tavily_contract_file" \
+    && rg -q "openclaw-hotfix: web_search provider order tavily=${WEB_SEARCH_TAVILY_ORDER}" "$tavily_provider_file"
 }
 
 check_telegram_setup_entry_hotfix() {
@@ -368,6 +437,161 @@ path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 PY
 }
 
+apply_tavily_standalone_tool_denied_hotfix() {
+  require_file "$OPENCLAW_CONFIG"
+  backup_file "$OPENCLAW_CONFIG"
+  python3 - "$OPENCLAW_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+tools = data.setdefault("tools", {})
+deny = tools.setdefault("deny", [])
+if not isinstance(deny, list):
+    deny = []
+    tools["deny"] = deny
+if "tavily_search" not in deny:
+    deny.append("tavily_search")
+path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+PY
+}
+
+apply_undici_paused_assert_hotfix() {
+  require_file "$UNDICI_CLIENT_H1"
+  backup_file "$UNDICI_CLIENT_H1"
+  python3 - "$UNDICI_CLIENT_H1" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+legacy_guard = re.compile(
+    r"    if \(this\.paused\) \{ return \} /\* openclaw-hotfix: undici paused guard \*/\n",
+)
+text = legacy_guard.sub("", text)
+
+execute_guard = """    if (this.paused) {
+      if (chunk.length > 0) {
+        this.socket.unshift(chunk)
+      }
+      return
+    } /* openclaw-hotfix: undici execute paused requeue */
+"""
+
+finish_guard = """    if (this.paused) {
+      this.llhttp.llhttp_resume(this.ptr)
+      this.paused = false
+    } /* openclaw-hotfix: undici finish resume if paused */
+"""
+
+on_upgrade_guard = """    if (this.paused) {
+      if (head.length > 0) {
+        this.socket.unshift(head)
+      }
+      return
+    } /* openclaw-hotfix: undici onUpgrade paused requeue */
+"""
+
+read_more_guard = """    if (this.paused) {
+      return
+    } /* openclaw-hotfix: undici readMore skip while paused */
+"""
+
+readable_guard = """function onHttpSocketReadable () {
+  const parser = this[kParser]
+  if (!parser || parser.paused) {
+    return
+  } /* openclaw-hotfix: undici readable skip while paused */
+  parser.readMore()
+}"""
+
+if "openclaw-hotfix: undici execute paused requeue" not in text:
+    text, count = re.subn(
+        r"(  execute \(chunk\) \{\n    assert\(currentParser === null\)\n    assert\(this\.ptr != null\)\n)"
+        r"(?:    assert\(!this\.paused\)\n|    if \(this\.paused\) \{ return \} /\* openclaw-hotfix: undici paused guard \*/\n|)",
+        r"\1" + execute_guard,
+        text,
+        count=1,
+    )
+    if count != 1:
+        raise SystemExit("undici execute patch anchor not found")
+
+if "openclaw-hotfix: undici finish resume if paused" not in text:
+    text, count = re.subn(
+        r"(  finish \(\) \{\n    assert\(currentParser === null\)\n    assert\(this\.ptr != null\)\n)"
+        r"(?:    assert\(!this\.paused\)\n|    if \(this\.paused\) \{ return \} /\* openclaw-hotfix: undici paused guard \*/\n|)",
+        r"\1" + finish_guard,
+        text,
+        count=1,
+    )
+    if count != 1:
+        raise SystemExit("undici finish patch anchor not found")
+
+if "openclaw-hotfix: undici onUpgrade paused requeue" not in text:
+    text, count = re.subn(
+        r"(    assert\(!socket\.destroyed\)\n)"
+        r"(?:    assert\(!this\.paused\)\n|    if \(this\.paused\) \{ return \} /\* openclaw-hotfix: undici paused guard \*/\n|)"
+        r"(    assert\(\(headers\.length & 1\) === 0\)\n)",
+        r"\1" + on_upgrade_guard + r"\2",
+        text,
+        count=1,
+    )
+    if count != 1:
+        raise SystemExit("undici onUpgrade patch anchor not found")
+
+if "openclaw-hotfix: undici readMore skip while paused" not in text:
+    text = text.replace(
+        "  readMore () {\n    while (!this.paused && this.ptr) {\n",
+        "  readMore () {\n" + read_more_guard + "    while (!this.paused && this.ptr) {\n",
+        1,
+    )
+
+if "openclaw-hotfix: undici readable skip while paused" not in text:
+    text = text.replace(
+        "function onHttpSocketReadable () {\n  this[kParser]?.readMore()\n}",
+        readable_guard,
+        1,
+    )
+
+required = [
+    "openclaw-hotfix: undici execute paused requeue",
+    "openclaw-hotfix: undici finish resume if paused",
+    "openclaw-hotfix: undici onUpgrade paused requeue",
+    "openclaw-hotfix: undici readMore skip while paused",
+    "openclaw-hotfix: undici readable skip while paused",
+]
+missing = [marker for marker in required if marker not in text]
+if missing:
+    raise SystemExit(f"undici client-h1 pause hotfix incomplete: missing {missing}")
+if "assert(!this.paused)" in text:
+    raise SystemExit("undici client-h1 pause hotfix incomplete: assert(!this.paused) remains")
+
+path.write_text(text)
+PY
+}
+
+apply_gateway_max_concurrent_hotfix() {
+  require_file "$OPENCLAW_CONFIG"
+  backup_file "$OPENCLAW_CONFIG"
+  python3 - "$OPENCLAW_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+defaults = data.setdefault("agents", {}).setdefault("defaults", {})
+current = defaults.get("maxConcurrent")
+if not isinstance(current, int) or current > 3:
+    defaults["maxConcurrent"] = 3
+path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+PY
+}
+
 apply_gateway_handshake_runtime_hotfix() {
   local client_file gateway_file
   client_file="$(find_client_file)"
@@ -435,6 +659,31 @@ PY
   perl -0777 -i -pe 's/const allowFallback = !hasExplicitWebSearchSelection\(\{\n\t\tsearch,\n\t\truntimeWebSearch,\n\t\tproviderId: params\.providerId,\n\t\tproviders: candidates\n\t\}\);/const allowFallback = candidates.length > 1;/s; s/result: await definition\.execute\(params\.args\)/result: await enqueueWebSearchWithCooldown(candidate.id, () => definition.execute(params.args))/g; s/const executed = await definition\.execute\(params\.args, \{ signal: params\.signal \}\);/const executed = await enqueueWebSearchWithCooldown(candidate.id, () => definition.execute(params.args, { signal: params.signal }));/g' "$WEB_SEARCH_RUNTIME_FILE"
 }
 
+apply_web_search_provider_order_hotfix() {
+  local searxng_file tavily_provider_file tavily_contract_file
+  searxng_file="$(find_searxng_search_provider_file)"
+  tavily_provider_file="$(find_tavily_search_provider_file)"
+  tavily_contract_file="$(find_tavily_web_search_contract_file)"
+
+  [[ -n "$searxng_file" ]] || { log "searxng search provider bundle not found"; return 1; }
+  [[ -n "$tavily_provider_file" ]] || { log "tavily search provider bundle not found"; return 1; }
+  [[ -n "$tavily_contract_file" ]] || { log "tavily web-search contract bundle not found"; return 1; }
+
+  backup_file "$searxng_file"
+  backup_file "$tavily_provider_file"
+  backup_file "$tavily_contract_file"
+
+  if ! rg -q "autoDetectOrder: ${WEB_SEARCH_SEARXNG_ORDER}," "$searxng_file"; then
+    perl -0777 -i -pe "s/autoDetectOrder: 200,/\\/\\/ openclaw-hotfix: web_search provider order searxng=${WEB_SEARCH_SEARXNG_ORDER}\n\t\tautoDetectOrder: ${WEB_SEARCH_SEARXNG_ORDER},/g" "$searxng_file"
+  fi
+  if ! rg -q "autoDetectOrder: ${WEB_SEARCH_TAVILY_ORDER}," "$tavily_provider_file"; then
+    perl -0777 -i -pe "s/autoDetectOrder: 70,/\\/\\/ openclaw-hotfix: web_search provider order tavily=${WEB_SEARCH_TAVILY_ORDER}\n\t\tautoDetectOrder: ${WEB_SEARCH_TAVILY_ORDER},/g" "$tavily_provider_file"
+  fi
+  if ! rg -q "autoDetectOrder: ${WEB_SEARCH_TAVILY_ORDER}," "$tavily_contract_file"; then
+    perl -0777 -i -pe "s/autoDetectOrder: 70,/\\/\\/ openclaw-hotfix: web_search provider order tavily=${WEB_SEARCH_TAVILY_ORDER}\n\t\tautoDetectOrder: ${WEB_SEARCH_TAVILY_ORDER},/g" "$tavily_contract_file"
+  fi
+}
+
 apply_telegram_setup_entry_hotfix() {
   local setup_entry_file="${DIST_DIR}/extensions/telegram/setup-entry.js"
   [[ -f "$setup_entry_file" ]] || return 0
@@ -447,17 +696,21 @@ apply_telegram_setup_entry_hotfix() {
 }
 
 print_check_summary() {
-  local small_status usage_status idle_timeout_status thinking_default_status minimax_disabled_status cron_status closed_audit_status gateway_rpc_status gateway_handshake_status web_search_fallback_status telegram_setup_entry_status
+  local small_status usage_status idle_timeout_status thinking_default_status minimax_disabled_status tavily_standalone_denied_status undici_paused_guard_status gateway_max_concurrent_status cron_status closed_audit_status gateway_rpc_status gateway_handshake_status web_search_fallback_status web_search_order_status telegram_setup_entry_status
   small_status="FAIL"
   usage_status="FAIL"
   idle_timeout_status="FAIL"
   thinking_default_status="FAIL"
   minimax_disabled_status="FAIL"
+  tavily_standalone_denied_status="FAIL"
+  undici_paused_guard_status="FAIL"
+  gateway_max_concurrent_status="FAIL"
   cron_status="FAIL"
   closed_audit_status="FAIL"
   gateway_rpc_status="FAIL"
   gateway_handshake_status="FAIL"
   web_search_fallback_status="FAIL"
+  web_search_order_status="FAIL"
   telegram_setup_entry_status="FAIL"
 
   check_small_model_hotfix && small_status="OK"
@@ -465,11 +718,15 @@ print_check_summary() {
   check_llm_idle_timeout_hotfix && idle_timeout_status="OK"
   check_thinking_default_hotfix && thinking_default_status="OK"
   check_minimax_disabled_hotfix && minimax_disabled_status="OK"
+  check_tavily_standalone_tool_denied_hotfix && tavily_standalone_denied_status="OK"
+  check_undici_paused_assert_hotfix && undici_paused_guard_status="OK"
+  check_gateway_max_concurrent_hotfix && gateway_max_concurrent_status="OK"
   check_cron_run_timeout_hotfix && cron_status="OK"
   check_closed_system_audit_hotfix && closed_audit_status="OK"
   check_gateway_rpc_config_hotfix && gateway_rpc_status="OK"
   check_gateway_handshake_runtime_hotfix && gateway_handshake_status="OK"
   check_web_search_provider_fallback_hotfix && web_search_fallback_status="OK"
+  check_web_search_provider_order_hotfix && web_search_order_status="OK"
   check_telegram_setup_entry_hotfix && telegram_setup_entry_status="OK"
 
   log "OpenClaw version: $("$OPENCLAW_BIN" --version 2>/dev/null || echo unknown)"
@@ -480,13 +737,17 @@ print_check_summary() {
   log "LLM idle timeout hotfix: ${idle_timeout_status}"
   log "thinkingDefault hotfix: ${thinking_default_status}"
   log "minimax disabled hotfix: ${minimax_disabled_status}"
+  log "tavily standalone tool denied hotfix: ${tavily_standalone_denied_status}"
+  log "undici client-h1 pause hotfix: ${undici_paused_guard_status}"
+  log "gateway maxConcurrent hotfix: ${gateway_max_concurrent_status}"
   log "cron.run timeout hotfix: ${cron_status}"
   log "gateway-rpc config hotfix: ${gateway_rpc_status}"
   log "gateway handshake/runtime hotfix: ${gateway_handshake_status}"
   log "web_search fallback+cooldown hotfix: ${web_search_fallback_status}"
+  log "web_search provider order hotfix: ${web_search_order_status}"
   log "telegram setup-entry hotfix: ${telegram_setup_entry_status}"
 
-  [[ "$small_status" == "OK" && "$closed_audit_status" == "OK" && "$usage_status" == "OK" && "$idle_timeout_status" == "OK" && "$thinking_default_status" == "OK" && "$minimax_disabled_status" == "OK" && "$cron_status" == "OK" && "$gateway_rpc_status" == "OK" && "$gateway_handshake_status" == "OK" && "$web_search_fallback_status" == "OK" && "$telegram_setup_entry_status" == "OK" ]]
+  [[ "$small_status" == "OK" && "$closed_audit_status" == "OK" && "$usage_status" == "OK" && "$idle_timeout_status" == "OK" && "$thinking_default_status" == "OK" && "$minimax_disabled_status" == "OK" && "$tavily_standalone_denied_status" == "OK" && "$undici_paused_guard_status" == "OK" && "$gateway_max_concurrent_status" == "OK" && "$cron_status" == "OK" && "$gateway_rpc_status" == "OK" && "$gateway_handshake_status" == "OK" && "$web_search_fallback_status" == "OK" && "$web_search_order_status" == "OK" && "$telegram_setup_entry_status" == "OK" ]]
 }
 
 main() {
@@ -537,6 +798,18 @@ main() {
         log "re-applying minimax disabled hotfix"
         apply_minimax_disabled_hotfix
       fi
+      if ! check_tavily_standalone_tool_denied_hotfix; then
+        log "re-applying tavily standalone tool deny hotfix"
+        apply_tavily_standalone_tool_denied_hotfix
+      fi
+      if ! check_undici_paused_assert_hotfix; then
+        log "re-applying undici client-h1 pause hotfix"
+        apply_undici_paused_assert_hotfix
+      fi
+      if ! check_gateway_max_concurrent_hotfix; then
+        log "re-applying gateway maxConcurrent hotfix"
+        apply_gateway_max_concurrent_hotfix
+      fi
       if ! check_gateway_handshake_runtime_hotfix; then
         log "re-applying gateway handshake/runtime hotfix"
         apply_gateway_handshake_runtime_hotfix
@@ -544,6 +817,10 @@ main() {
       if ! check_web_search_provider_fallback_hotfix; then
         log "re-applying web_search fallback+cooldown hotfix"
         apply_web_search_provider_fallback_hotfix
+      fi
+      if ! check_web_search_provider_order_hotfix; then
+        log "re-applying web_search provider order hotfix"
+        apply_web_search_provider_order_hotfix
       fi
       if ! check_telegram_setup_entry_hotfix; then
         log "re-applying telegram setup-entry hotfix"

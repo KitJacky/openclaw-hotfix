@@ -18,7 +18,8 @@ Owner：Jacky Kit / https://jackykit.com
 ### 2026.5.22
 - 透過 **`npm i -g openclaw@latest`** 將全域套件從 **`2026.5.7` 升到 `2026.5.22`**，接著 **`openclaw-post-update-hotfix.sh --apply`**／**`--check`**（皆通過）。
 - **pi-ai npm scope 變更：** `include_usage` hotfix 的目標改為 **`@earendil-works/pi-ai`**（舊：`@mariozechner/pi-ai`）。主機腳本 [`workspace/scripts/openclaw-post-update-hotfix.sh`](/root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh) 會自動嘗試兩條路徑。
-- **Hotfix 腳本收緊到 `2026.05.26.1`：** `web_search` cooldown 驗證現在必須確認 provider execution 有實際呼叫 `enqueueWebSearchWithCooldown(candidate.id, ...)`，不能只檢查 helper 是否存在。這修正了 `2026.5.22` 後的一個 false-positive check。
+- **Hotfix 腳本收緊到 `2026.05.26.4`：** undici `client-h1` pause 處理由單純刪 assert 升級為語意化 guard（requeue bytes、finish 前 resume、paused 時跳過 readable）。先前 `2026.05.26.3` 的 web_search cooldown 接線仍保留。
+- **Gateway 自行 restart 緩解：** 重複 crash 來自 bundled **`undici@8.3.0`** 的 `client-h1.js`（`assert(!this.paused)`），不是 systemd/health-monitor 主動重啟。觸發模式是 cron 並發（browser + web_search + exec）加上 event-loop delay。本機緩解：在 `undici/lib/dispatcher/client-h1.js` 做語意化 patch、將 `agents.defaults.maxConcurrent` 限到 `3`、deny standalone `tavily_search`。
 - 已執行 **`openclaw doctor --non-interactive --fix`**；並重啟 systemd user **`openclaw-gateway.service`**／**`openclaw-node.service`**。Gateway **剛重啟後** `gateway health` 可能短暫出現 **WebSocket 1006**；待 log 顯示 **ready** 後再重試即可。
 - 在 Agent／IDE 環境執行 `openclaw` 時，請讓 PATH 優先 **`/usr/bin` 的 Node 22**，避免 Cursor 內建的 **Node v20** 排到前面而觸發「需要 Node ≥22.12」並直接退出。
 - 驗證快照（warm 後）：
@@ -61,7 +62,7 @@ Owner：Jacky Kit / https://jackykit.com
 ## 套件內 Hotfix
 以下修補位於 `/usr/lib/node_modules/openclaw/...`，升級後通常會被覆蓋，必須重新檢查。
 
-目前 `2026.5.22 (a374c3a)` 搭配 hotfix 腳本 `2026.05.26.1` 的狀態：
+目前 `2026.5.22 (a374c3a)` 搭配 hotfix 腳本 `2026.05.26.4` 的狀態：
 - Small-model audit severity：已修補（不再升為 `critical`，仍以 `info` 可見）。
 - OpenAI streaming usage：已在 `@earendil-works/pi-ai` 修補；腳本仍支援舊 `@mariozechner/pi-ai` 路徑。
 - LLM idle timeout / thinking default：設定有效（`models.providers.local.timeoutSeconds = 900`、`thinkingDefault = "low"`）。
@@ -69,7 +70,11 @@ Owner：Jacky Kit / https://jackykit.com
 - Closed-system audit downgrade：已修補（下列 `warn` / conditional critical 項目均降為 `info`）。
 - Gateway RPC config path：目前 call path 相容，不需要強行套舊版 config injection。
 - `web_search` fallback + cooldown：已修補；多 provider 可用時允許 fallback，且 provider execution 已經走 `enqueueWebSearchWithCooldown(candidate.id, ...)`。
+- `web_search` provider 順序：已 patch 為 **Brave (10) → SearXNG (15) → Tavily (25) → DuckDuckGo (100)**（hotfix `2026.06.08.1`）。
 - MiniMax fallback suppression：設定有效（`plugins.entries.minimax.enabled = false`）。
+- Standalone Tavily tool exposure：已透過 config deny（`tools.deny` 包含 `tavily_search`）；Tavily quota exhaustion 與 Gateway 自行 restart 有關聯，只有在 quota 恢復且重新檢查 tool-surface policy 後才應再啟用。
+- Undici client-h1 pause hotfix：已 patch `undici/lib/dispatcher/client-h1.js`，用語意化 pause 處理（`execute`/`onUpgrade` requeue、`finish` 前 `llhttp_resume`、paused 時跳過 `readMore`/`readable`），取代 upstream `assert(!this.paused)` 直接 crash。
+- Gateway session concurrency：已透過 config 限流（`agents.defaults.maxConcurrent = 3`），降低 cron 期間 browser/web_search 並發 HTTP 壓力。
 - Telegram `/new` 與 `/reset` 卡死緩解：設定有效（`agents.defaults.startupContext.enabled = false`）。
 - Telegram setup-entry compatibility：目前上游 layout 有效（`setup-plugin-api.js` + `secret-contract-api.js`）。
 
@@ -132,14 +137,19 @@ Owner：Jacky Kit / https://jackykit.com
 - 舊版曾因 `callGatewayFromCli(...)` 未注入 config 而導致 `openclaw cron run` 出現 `gateway closed (1000 normal closure)`
 - 新版不一定還用相同 bundle，因此檢查邏輯需要版本感知
 
-### 6) web_search 供應商備援 + 冷卻（Brave -> Tavily）
+### 6) web_search 供應商備援 + 冷卻（Brave → SearXNG → Tavily → DuckDuckGo）
 目的：
 - 高頻研究排程下，Brave 常出現 `429 rate limit`
+- Tavily dev quota 可能出現 `432`
+- 本機自建 SearXNG（`http://127.0.0.1:8321`）提供免 key、無 quota 上限的備援，應在 Tavily 之前
 - `2026.4.14+` 上游已內建基本 provider fallback，但本機仍需要每個 provider 的冷卻佇列，否則高頻 cron 仍會撞 429
+- 上游預設把 SearXNG 排最後（order 200）；本機 hotfix 覆寫 `autoDetectOrder` 以符合 free-first 策略
 
 目標檔案：
-- `/usr/lib/node_modules/openclaw/dist/runtime-*.js`
-- 實際 hash bundle 每版都可能不同；hotfix 腳本會尋找包含 `async function runWebSearch(params)` 的檔案。
+- `/usr/lib/node_modules/openclaw/dist/runtime-*.js`（fallback + cooldown）
+- `dist/searxng-search-provider-*.js`（`200 → 15`）
+- `dist/tavily-search-provider-*.js` 與 `dist/extensions/tavily/web-search-contract-api.js`（`70 → 25`）
+- Brave 維持 `10`；DuckDuckGo 維持 `100`
 
 必要邏輯：
 - 在多個 provider 可用時保持 fallback 能力；本機允許明確指定 provider 時仍可 fallback
@@ -151,12 +161,23 @@ Owner：Jacky Kit / https://jackykit.com
 
 環境需求：
 - `TAVILY_API_KEY` 必須可讀取（本機放在 `/root/.openclaw/.env`）
+- `SEARXNG_BASE_URL=http://127.0.0.1:8321`（Docker：`/root/.openclaw/searxng/`，**勿用 8888**，該 port 已被 SSH tunnel 占用）
 - gateway/node service 需載入 `.env`：
   - `EnvironmentFile=-/root/.openclaw/.env`
 - 冷卻參數：
   - `OPENCLAW_WEB_SEARCH_COOLDOWN_MS`（優先，限制在 1000-5000ms）
 - `OPENCLAW_WEB_SEARCH_COOLDOWN_SECONDS`（次要，限制在 1-5 秒）
 - 本機預設：`OPENCLAW_WEB_SEARCH_COOLDOWN_MS=2000`
+
+重要 config 規則：
+- **不要**設定 `tools.web.search.provider = "brave"`（或任何單一 id）— 會禁用 fallback（`onlyPluginIds`）
+- 順序**無法**在 `openclaw.json` 設定，必須靠 hotfix patch `autoDetectOrder`
+
+本機 fallback 順序：
+1. Brave（API 免費額度）
+2. SearXNG（自建，port 8321）
+3. Tavily（dev 額度）
+4. DuckDuckGo（VPS 上常 bot challenge，最後備援）
 
 ### 6A) 關閉本機未配置的 MiniMax web_search 備援
 目的：
@@ -171,7 +192,7 @@ Owner：Jacky Kit / https://jackykit.com
 - `plugins.entries.minimax.enabled = false`
 
 本機策略：
-- 本機 `web_search` 主路徑為 Brave，明確備援為 Tavily。
+- 本機 `web_search` 主路徑為 Brave；備援順序為 SearXNG → Tavily → DuckDuckGo（見 §6 hotfix order patch）。
 - 除非之後真的配置 MiniMax 憑證，否則 `minimax` 必須保持停用。
 - 不要把沒有真實憑證與路由策略的 provider/plugin surface 暴露給 LLM。
 

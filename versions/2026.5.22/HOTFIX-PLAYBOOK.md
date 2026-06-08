@@ -18,7 +18,8 @@ When OpenClaw is updated, read this file first, then run the post-update checkli
 ### 2026.5.22
 - Upgraded globally from **`2026.5.7` → `2026.5.22`** via `npm i -g openclaw@latest`, then **`openclaw-post-update-hotfix.sh --apply`** and **`--check`** (all OK).
 - **pi-ai npm scope migration:** Streaming `include_usage` hotfix targets **`@earendil-works/pi-ai`** (formerly **`@mariozechner/pi-ai`**). Host script [`workspace/scripts/openclaw-post-update-hotfix.sh`](/root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh) resolves either path automatically.
-- **Hotfix script tightened to `2026.05.26.1`:** `web_search` cooldown validation now requires provider execution to call `enqueueWebSearchWithCooldown(candidate.id, ...)`, not merely that the helper exists in the bundle. This fixed a false-positive check after `2026.5.22`.
+- **Hotfix script tightened to `2026.05.26.4`:** undici `client-h1` pause handling upgraded from bare assert removal to semantic guards (requeue bytes, resume-before-finish, skip readable while paused). Prior `2026.05.26.3` web_search cooldown wiring remains required.
+- **Gateway self-restart mitigation:** repeated crashes are **`AssertionError: assert(!this.paused)`** from bundled **`undici@8.3.0`** (`client-h1.js`), not systemd/health-monitor logic. Trigger pattern: concurrent cron work (browser + web_search + exec) under event-loop delay. Host mitigations: semantic patch in `undici/lib/dispatcher/client-h1.js`, cap `agents.defaults.maxConcurrent` to `3`, and deny standalone `tavily_search` (`tools.deny += ["tavily_search"]`).
 - **`openclaw doctor --non-interactive --fix`** completed; systemd user **`openclaw-gateway.service`** / **`openclaw-node.service`** restarted. Immediately after gateway restart, `gateway health` can return **1006** until the Gateway reaches **ready**; retry after readiness.
 - Run OpenClaw CLI with **system Node 22** on PATH (**`/usr/bin` before Cursor-bundled Node v20**) so `/usr/bin/openclaw` does not abort with minimum-version errors.
 - Host verification snapshot (after warm-up):
@@ -58,7 +59,7 @@ When OpenClaw is updated, read this file first, then run the post-update checkli
 These patch files under `/usr/lib/node_modules/openclaw/...`.
 They are likely to be overwritten by package upgrades and must be rechecked after every update.
 
-Current package/config guard status on `2026.5.22 (a374c3a)` with hotfix script `2026.05.26.1`:
+Current package/config guard status on `2026.5.22 (a374c3a)` with hotfix script `2026.05.26.4`:
 - Small-model audit severity: patched (`critical` downgrade removed; finding remains visible as `info`).
 - OpenAI streaming usage: patched in `@earendil-works/pi-ai`; legacy `@mariozechner/pi-ai` remains supported by the script.
 - LLM idle timeout / thinking default: valid via config (`models.providers.local.timeoutSeconds = 900`, `thinkingDefault = "low"`).
@@ -66,7 +67,11 @@ Current package/config guard status on `2026.5.22 (a374c3a)` with hotfix script 
 - Closed-system audit downgrade: patched (`warn`/conditional critical checks listed below are `info`).
 - Gateway RPC config path: current call path is compatible; no legacy forced injection patch required.
 - `web_search` fallback + cooldown: patched; fallback is allowed when more than one provider is available and provider execution is routed through `enqueueWebSearchWithCooldown(candidate.id, ...)`.
+- `web_search` provider order: patched to **Brave (10) -> SearXNG (15) -> Tavily (25) -> DuckDuckGo (100)** via bundled `autoDetectOrder` overrides (hotfix `2026.06.08.1`).
 - MiniMax fallback suppression: config valid (`plugins.entries.minimax.enabled = false`).
+- Standalone Tavily tool exposure: denied via config (`tools.deny` includes `tavily_search`) because Tavily quota exhaustion was correlated with Gateway self-restarts; re-enable only after quota recovery and tool-surface policy review.
+- Undici client-h1 pause hotfix: patched in `undici/lib/dispatcher/client-h1.js` with semantic pause handling (requeue on `execute`/`onUpgrade`, `llhttp_resume` before `finish`, skip `readMore`/`readable` while paused) instead of upstream `assert(!this.paused)` crashes.
+- Gateway session concurrency: capped via config (`agents.defaults.maxConcurrent = 3`) to reduce concurrent browser/web_search HTTP pressure during cron runs.
 - Telegram `/new` and `/reset` stall mitigation: config valid (`agents.defaults.startupContext.enabled = false`).
 - Telegram setup-entry compatibility: current upstream layout is valid (`setup-plugin-api.js` + `secret-contract-api.js`).
 
@@ -169,14 +174,21 @@ Expected behavior after patch:
 - if a job is already active, CLI should return business result like:
   - `{"ok":true,"ran":false,"reason":"already-running"}`
 
-### 6) web_search provider fallback + cooldown (Brave -> Tavily)
+### 6) web_search provider fallback + cooldown (Brave -> SearXNG -> Tavily -> DuckDuckGo)
 Reason:
 - `web_search` can hit Brave 429 throttling under high-frequency cron research.
+- Tavily can also hit plan quota (`432`) under sustained CAEP load.
+- Self-hosted SearXNG on `http://127.0.0.1:8321` provides a key-free, unlimited fallback before paid/dev quota is consumed.
 - `2026.4.14` upstream now includes provider fallback in `runWebSearch(params)`, but it still lacks the per-provider cooldown guard needed on this host.
+- Upstream auto-detect order places SearXNG last (order 200) and Tavily before DuckDuckGo; this host overrides order to match the free-first policy below.
 
 Patch target:
 - `/usr/lib/node_modules/openclaw/dist/runtime-*.js`
 - The exact hashed bundle changes per release; the hotfix script locates the bundle containing `async function runWebSearch(params)`.
+- Provider order patch targets:
+  - `dist/searxng-search-provider-*.js` (`autoDetectOrder: 200` -> `15`)
+  - `dist/tavily-search-provider-*.js` and `dist/extensions/tavily/web-search-contract-api.js` (`autoDetectOrder: 70` -> `25`)
+  - Brave stays `10`; DuckDuckGo stays `100`
 
 Required patched logic:
 - Keep fallback enabled when multiple providers are available, including explicitly selected providers on this host.
@@ -190,6 +202,10 @@ Environment requirements:
 - Tavily key must be available via:
   - `TAVILY_API_KEY` (env), or
   - `plugins.entries.tavily.config.webSearch.apiKey`
+- SearXNG must be reachable via:
+  - `SEARXNG_BASE_URL=http://127.0.0.1:8321` (env), and/or
+  - `plugins.entries.searxng.config.webSearch.baseUrl`
+- Docker service: `/root/.openclaw/searxng/docker-compose.yml` (`openclaw-searxng`, port **8321** — not 8888; SSH tunnels occupy 8888/8889 on this host)
 - This host uses:
   - `/root/.openclaw/.env` with `TAVILY_API_KEY=...`
   - `EnvironmentFile=-/root/.openclaw/.env` in gateway/node systemd user units
@@ -224,6 +240,78 @@ Verification:
 - `openclaw plugins list --json | rg '"id": "minimax"|\"enabled\": false'`
 - `bash /root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh --check`
 - Confirm new autonomous sessions stop receiving `missing_minimax_api_key` tool results.
+
+### 6C) DuckDuckGo keyless fallback + SearXNG self-host (not browser scrape)
+Reason:
+- When Brave returns `429` and SearXNG/Tavily are unavailable, CAEP research must still have a discovery path.
+- `openclaw browser` cannot replace `web_search`: it has no search subcommand and scraping search-engine UI is slow, brittle, and more anti-bot prone than API providers.
+- DuckDuckGo is bundled, needs no API key, and works via `openclaw infer web search --provider duckduckgo` (but is unreliable on datacenter IPs — keep as last resort).
+- SearXNG is self-hosted on this host and should run **before** Tavily dev quota is consumed.
+
+Critical config rule:
+- Do **not** set `tools.web.search.provider = "brave"` (or any single provider id) on this host.
+- An explicit provider id restricts provider loading to that plugin only (`onlyPluginIds`), which disables runtime fallback even when the hotfix sets `allowFallback = candidates.length > 1`.
+- Keep Brave credentials in `plugins.entries.brave.config.webSearch.apiKey`; auto-detect still prefers Brave first when credentials exist.
+
+Required settings:
+- `tools.web.search.enabled = true` with **no** hard `provider` lock
+- `plugins.entries.duckduckgo.enabled = true`
+- `plugins.entries.brave.enabled = true`
+- `plugins.entries.tavily.enabled = true`
+- `plugins.entries.searxng.enabled = true` with `config.webSearch.baseUrl = "http://127.0.0.1:8321"`
+- `tools.deny` includes `tavily_search` (standalone tool stays denied; runtime `web_search` may still use Tavily as a provider)
+
+Fallback order on this host (after hotfix `2026.06.08.1`):
+1. **Brave** (primary, credential-backed, order 10)
+2. **SearXNG** (self-hosted, key-free, order 15)
+3. **Tavily** (dev quota, credential-backed, order 25)
+4. **DuckDuckGo** (keyless last resort, order 100)
+5. Browser is **not** a search fallback; use only after `web_fetch` fails on a known URL
+
+Notes:
+- Order is **not** configurable in `openclaw.json`; it comes from bundled `autoDetectOrder` values patched by `openclaw-post-update-hotfix.sh`.
+- Do not lock `tools.web.search.provider` to a single id — that disables fallback (`onlyPluginIds`).
+
+Verification:
+- `openclaw infer web providers --json | rg 'brave|searxng|tavily|duckduckgo'`
+- `bash /root/.openclaw/workspace/scripts/openclaw-post-update-hotfix.sh --check` (includes `web_search provider order hotfix: OK`)
+- With Brave quota exhausted, `openclaw infer web search --query "preflight health check" --json` should succeed via **searxng** fallback (check `provider` field).
+- `bash /root/.openclaw/workspace/scripts/web_research_preflight.sh`
+
+### 6D) Web research tool boundary (web_search / web_fetch / browser)
+Reason:
+- CAEP 8888/8889 cron jobs already require `web_search` / `web_fetch` first and say `Avoid browser unless explicitly required`.
+- Agents sometimes confuse `openclaw browser` (page automation) with discovery tooling.
+
+Three-layer policy for this host:
+
+| Layer | Tool / CLI | Input | Use when |
+|---|---|---|---|
+| Discovery | `web_search` / `openclaw infer web search` | natural-language query | topic hunting, ranked URLs + snippets |
+| Extraction | `web_fetch` / `openclaw infer web fetch` | known URL | read page content after search picks a source |
+| Interaction | `openclaw browser` / agent browser tool | URL + refs / clicks | 403/challenge/login wall, heavy SPA, UI-only content, screenshots |
+
+Do **not**:
+- use browser to scrape Google/Brave/DuckDuckGo result pages as a `web_search` substitute
+- pivot to browser when Brave/Tavily quota fails — fix provider fallback instead (§6C)
+- skip `web_search` on CAEP runs unless policy explicitly allows notes-only / local-memory pivot
+
+Browser preflight:
+- `openclaw browser doctor` — plugin + CDP must be reachable
+- browser may be stopped by default; start only when a job actually needs interaction:
+  - `openclaw browser start`
+
+CLI equivalents:
+```bash
+openclaw infer web search --query "..." --json
+openclaw infer web fetch --url "https://..." --json
+openclaw infer web providers --json
+openclaw browser doctor
+```
+
+When quota is exhausted:
+- shrink CAEP source-attempt budget / pivot to `caep_v2_bookplay.md` / three-day report
+- do **not** replace discovery with browser automation
 
 ### 6B) Telegram `/new` and `/reset` stall mitigation on this host
 Reason:
@@ -632,7 +720,7 @@ Notes:
 These usually survive OpenClaw package upgrades:
 - `/root/.openclaw/openclaw.json`
 - `/root/.openclaw/cron/jobs.json`
-- `/root/.openclaw/workspace/scripts/*.sh`
+- `/root/.openclaw/workspace/scripts/*.sh` (includes `web_research_preflight.sh`)
 - `/root/.config/systemd/user/openclaw-gateway.service.d/*.conf`
 
 ## Files Likely Overwritten by Upgrades

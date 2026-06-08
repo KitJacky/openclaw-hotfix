@@ -1,8 +1,8 @@
 {
   "latest": {
     "openclaw_version": "2026.5.22",
-    "hotfix_version": "2026.05.26.1",
-    "updated_at": "2026-05-26T03:58:24Z"
+    "hotfix_version": "2026.06.08.1",
+    "updated_at": "2026-06-08T04:54:35Z"
   },
   "versions": {
     "2026.3.28": {
@@ -96,8 +96,8 @@
       ]
     },
     "2026.5.22": {
-      "hotfix_version": "2026.05.26.1",
-      "updated_at": "2026-05-26T03:58:24Z",
+      "hotfix_version": "2026.06.08.1",
+      "updated_at": "2026-06-08T04:54:35Z",
       "files": [
         "versions/2026.5.22/openclaw-post-update-hotfix.sh",
         "versions/2026.5.22/HOTFIX-PLAYBOOK.md",
